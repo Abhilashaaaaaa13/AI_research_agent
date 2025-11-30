@@ -1,0 +1,31 @@
+#Core Frameworks
+
+langchain==0.3.7
+langchain-google-genai==2.0.4
+langchain-community==0.3.7
+langchain-core==0.3.19
+langgraph==0.2.48
+
+#UI
+
+streamlit==1.40.1
+
+#Data Processing & Math
+
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+
+#PDF & File Handling
+
+pymupdf==1.24.13  # This is the 'fitz' library
+
+#AI & Embeddings
+
+sentence-transformers==3.3.1
+python-dotenv==1.0.1
+
+#Research APIs
+
+arxiv==2.1.3
+requests==2.32.3

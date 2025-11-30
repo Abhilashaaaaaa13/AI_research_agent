@@ -1,0 +1,212 @@
+import streamlit as st
+import uuid
+import pandas as pd
+from langchain_core.messages import HumanMessage, AIMessage
+
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="Deep Research Agent",
+    page_icon="🧬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+from agent import graph
+
+# --- 🌙 Dark Mode CSS ---
+st.markdown("""
+<style>
+/* Background */
+.stApp {
+    background-color: #0d1117 !important;
+    color: #ffffff !important;
+}
+
+/* Section Header */
+.section-header {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #ffffff !important;
+    margin-top: 25px;
+    margin-bottom: 15px;
+    border-bottom: 3px solid #6366f1;
+    padding-bottom: 5px;
+}
+
+/* Paper Card */
+.paper-card {
+    background-color: #1e1e1e !important;
+    padding: 15px;
+    border-radius: 10px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    margin-bottom: 12px;
+    border-left: 5px solid #6366f1;
+}
+.paper-card h5 { color: white !important; font-weight: 700; margin-bottom: 6px; }
+.paper-card p { color: #d1d5db !important; font-size: 0.9em; margin: 0; }
+
+/* Buttons */
+div.stButton > button {
+    background-color: #30363d !important;
+    color: #ffffff !important;
+    border-radius: 8px;
+    border: 1px solid #6366f1;
+}
+div.stButton > button:hover {
+    background-color: #6366f1 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# --- Session State ---
+if "thread_id" not in st.session_state: st.session_state.thread_id = str(uuid.uuid4())
+if "messages" not in st.session_state: st.session_state.messages = []
+if "topic" not in st.session_state: st.session_state.topic = ""
+if "research_started" not in st.session_state: st.session_state.research_started = False
+
+for key in ["ranked_papers", "trends_content", "gaps_content",
+            "roadmap_content", "final_report"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+for key in ["show_trends", "show_gaps", "show_roadmap", "show_summary"]:
+    if key not in st.session_state:
+        st.session_state[key] = False
+
+# --- Sidebar ---
+with st.sidebar:
+    st.title("🧬 Control Panel")
+    if st.button("🆕 New Research", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+
+# --- Input UI ---
+if not st.session_state.research_started:
+    st.title("🔬 Deep AI Research Agent")
+    topic = st.text_input("Enter Research Topic")
+    if st.button("🚀 Fetch & Rank Papers", type="primary"):
+        if not topic.strip():
+            st.error("Topic required!")
+        else:
+            st.session_state.topic = topic
+            st.session_state.research_started = True
+            st.rerun()
+
+# --- Step 1: Fetch + Rank Only ---
+if st.session_state.research_started and st.session_state.ranked_papers is None:
+
+    st.title(f"🧠 Researching: {st.session_state.topic}")
+    config = {"configurable": {"thread_id": st.session_state.thread_id}}
+
+    with st.status("📚 Fetching & ranking best papers...", expanded=True) as stbox:
+        for event in graph.stream({"topic": st.session_state.topic}, config=config):
+            for node, values in event.items():
+
+                if node == "fetch":
+                    stbox.write("Fetched raw papers...")
+                if node == "rank":
+                    st.session_state.ranked_papers = values["ranked_papers"]
+                    stbox.write("Ranked based on relevance & citations 📈")
+                    stbox.update(label="⭐ Ranking Complete!", state="complete")
+                    st.rerun()
+
+# --- Step 1 UI Display ---
+if st.session_state.ranked_papers:
+    st.markdown('<div class="section-header">1️⃣ Top Ranked Papers</div>', unsafe_allow_html=True)
+
+    for p in st.session_state.ranked_papers[:5]:
+        st.markdown(f"""
+        <div class="paper-card">
+            <h5>{p["title"]}</h5>
+            <p><b>Score:</b> {p["finalscore"]:.2f} | <b>Citations:</b> {p["citationcount"]}</p>
+            <a href="{p['pdf_url']}" target="_blank" style="color:#6366f1;">🔗 PDF</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if not st.session_state.show_trends:
+        if st.button("📈 Extract Trends"):
+            st.session_state.show_trends = True
+            st.rerun()
+
+# --- Step 2: Trends ---
+if st.session_state.show_trends and st.session_state.trends_content is None:
+    with st.spinner("📉 Extracting Trends..."):
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        for event in graph.stream({"topic": st.session_state.topic}, config=config):
+            if "extract_trends" in event:
+                st.session_state.trends_content = event["extract_trends"]["trends"]
+                st.rerun()
+
+if st.session_state.trends_content:
+    st.markdown('<div class="section-header">2️⃣ Trends in Research</div>', unsafe_allow_html=True)
+    st.markdown(st.session_state.trends_content)
+
+    if not st.session_state.show_gaps:
+        if st.button("🧩 Show Research Gaps"):
+            st.session_state.show_gaps = True
+            st.rerun()
+
+# --- Step 3: Gaps ---
+if st.session_state.show_gaps and st.session_state.gaps_content is None:
+    with st.spinner("🔍 Finding Gaps..."):
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        for event in graph.stream({"topic": st.session_state.topic}, config=config):
+            if "extract_gaps" in event:
+                st.session_state.gaps_content = event["extract_gaps"]["gaps"]
+                st.rerun()
+
+if st.session_state.gaps_content:
+    st.markdown('<div class="section-header">3️⃣ Research Gaps</div>', unsafe_allow_html=True)
+    for g in st.session_state.gaps_content:
+        st.markdown(f"**{g['source']}** → {g['gaps']}")
+
+    if not st.session_state.show_roadmap:
+        if st.button("🗺️ Generate Roadmap"):
+            st.session_state.show_roadmap = True
+            st.rerun()
+
+# --- Step 4: Roadmap ---
+if st.session_state.show_roadmap and st.session_state.roadmap_content is None:
+    with st.spinner("🛠 Creating Roadmap..."):
+        for event in graph.stream({"topic": st.session_state.topic},
+                                  config={"configurable": {"thread_id": st.session_state.thread_id}}):
+            if "create_roadmap" in event:
+                st.session_state.roadmap_content = event["create_roadmap"]["roadmap"]
+                st.rerun()
+
+if st.session_state.roadmap_content:
+    st.markdown('<div class="section-header">4️⃣ Roadmap</div>', unsafe_allow_html=True)
+    st.markdown(st.session_state.roadmap_content)
+
+    if not st.session_state.show_summary:
+        if st.button("📑 Final Summary"):
+            st.session_state.show_summary = True
+            st.rerun()
+
+# --- Step 5: Summary & Chatbot ---
+if st.session_state.show_summary and st.session_state.final_report is None:
+    with st.spinner("✍ Creating Summary..."):
+        for event in graph.stream({"topic": st.session_state.topic},
+                                  config={"configurable": {"thread_id": st.session_state.thread_id}}):
+            if "summary" in event:
+                st.session_state.final_report = event["summary"]["analysis_report"]
+                st.rerun()
+
+if st.session_state.final_report:
+    st.markdown('<div class="section-header">5️⃣ Final Summary</div>', unsafe_allow_html=True)
+    st.markdown(st.session_state.final_report)
+
+    st.markdown("---")
+    st.subheader("💬 Q&A Chatbot")
+
+    for msg in st.session_state.messages:
+        st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant").write(msg.content)
+
+    if prompt := st.chat_input("Ask questions about this topic"):
+        st.session_state.messages.append(HumanMessage(content=prompt))
+        for event in graph.stream({"messages": [HumanMessage(content=prompt)]},
+                                  config={"configurable": {"thread_id": st.session_state.thread_id}}):
+            if "chatbot" in event:
+                ai_msg = event["chatbot"]["messages"][-1].content
+                st.chat_message("assistant").write(ai_msg)
+                st.session_state.messages.append(AIMessage(content=ai_msg))

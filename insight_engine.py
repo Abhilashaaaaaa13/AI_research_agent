@@ -17,12 +17,11 @@ def load_model():
     if not api_key:
         print("Warning: GOOGLE_API_KEY not found!")
         return None
-    
+
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=api_key,
         temperature=0.2,  # Lower temp for factual output
-        convert_system_message_to_human=True
     )
 
 def generate_response(prompt: str, llm, json_mode: bool = False) -> str:
@@ -51,10 +50,10 @@ def get_full_text(pdf_url: str) -> str:
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(pdf_url, stream=True, timeout=15, headers=headers)
-        
+
         if "application/pdf" not in res.headers.get("Content-Type", ""):
             return None
-        
+
         doc = fitz.open(stream=res.content, filetype="pdf")
         start_page = int(doc.page_count * 0.80)
         text = "".join(doc[i].get_text() for i in range(start_page, doc.page_count))
@@ -106,15 +105,15 @@ PAPERS:
 {paper_context}
 """
 
-
     try:
-        result = json.loads(generate_response(prompt, client, json_mode=True))
+        result_text = generate_response(prompt, client, json_mode=True)
+        result = json.loads(result_text)
         score_map = {item['ID']: item['Score'] for item in result}
         top_papers['LLM_Score'] = top_papers.index.map(score_map).fillna(0)
         scored_df = papers_df.merge(top_papers[['ArXiv ID', 'LLM_Score']], on='ArXiv ID', how='left')
         scored_df['LLM_Score'] = scored_df['LLM_Score'].fillna(0)
         return scored_df
-    except:
+    except Exception:
         return papers_df.assign(LLM_Score=2.5)
 
 
@@ -134,11 +133,10 @@ Topic: "{raw_topic}"
 Output ONLY a valid JSON list of query strings. No extra text.
 """
 
-
     try:
         queries = json.loads(generate_response(prompt, llm, json_mode=True))
         return [q.strip() for q in queries]
-    except:
+    except Exception:
         return [raw_topic]
 
 
@@ -173,10 +171,15 @@ Use only the provided papers:
 
 # ------------------ Gap Identification ------------------
 def find_gaps_with_citations(top_papers_df: pd.DataFrame, llm, num_gaps: int = 2):
+    """
+    RETURNS:
+      A list of dicts: [{"source": <paper title>, "gaps": <text>}, ...]
+    NOTE (IMPORTANT): The keys 'source' and 'gaps' are chosen to match the Streamlit UI display.
+    """
     gaps = []
     for _, p in top_papers_df.head(3).iterrows():
         text = get_full_text(p.get('pdf_url'))
-        if not text: 
+        if not text:
             text = p.get('Summary', '')[:3000]
 
         prompt = f"""
@@ -195,9 +198,9 @@ Paper Title: {p['Title']}
 Text: {text[:4000]}
 """
 
-
         response = generate_response(prompt, llm)
-        gaps.append({"source_paper": p["Title"], "gaps_text": response})
+        # Normalize output into the keys that Streamlit expects:
+        gaps.append({"source": p["Title"], "gaps": response})
 
     return gaps
 
@@ -205,7 +208,7 @@ Text: {text[:4000]}
 # ------------------ Roadmap Generation ------------------
 def suggest_roadmap(topic: str, gaps: List[Dict], llm):
     gaps_text = "\n".join(
-        [f"{item['source_paper']}:\n{item['gaps_text']}" for item in gaps]
+        [f"{item['source']}:\n{item['gaps']}" for item in gaps]
     )
 
     prompt = f"""
@@ -228,7 +231,6 @@ Example format:
 
 Ensure logical progression from theory → methodology → experiments → evaluation.
 """
-
 
     return generate_response(prompt, llm)
 
@@ -278,6 +280,5 @@ RESPONSE RULES:
 
 Provide a single, clear answer now.
 """
-
 
     return generate_response(prompt, llm)
