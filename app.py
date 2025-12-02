@@ -83,14 +83,27 @@ with st.sidebar:
 # --- Input UI ---
 if not st.session_state.research_started:
     st.title("🔬 Deep AI Research Agent")
-    topic = st.text_input("Enter Research Topic")
-    if st.button("🚀 Fetch & Rank Papers", type="primary"):
-        if not topic.strip():
-            st.error("Topic required!")
-        else:
-            st.session_state.topic = topic
-            st.session_state.research_started = True
-            st.rerun()
+    topic = st.text_input("Enter Research Topic", placeholder="e.g. Generative AI Agents")
+    
+    if topic:
+        st.write("Great! Now, how many papers should I fetch?")
+        
+        # FIX: Value is empty string ("") so user MUST type
+        num_papers_str = st.text_input("Type a number (e.g. 5)", value="")
+        
+        if st.button("🚀 Fetch & Rank Papers", type="primary"):
+            
+            # Validation: Check if empty OR not a number
+            if not num_papers_str.strip():
+                 st.error("Please enter the number of papers.")
+            elif not num_papers_str.isdigit():
+                st.error("Please enter a valid number (e.g. 3, 5, 10).")
+            else:
+                st.session_state.topic = topic
+                st.session_state.max_results = int(num_papers_str)
+                st.session_state.research_started = True
+                st.rerun()
+    
 
 # --- Step 1: Fetch + Rank Only ---
 if st.session_state.research_started and st.session_state.ranked_papers is None:
@@ -99,7 +112,13 @@ if st.session_state.research_started and st.session_state.ranked_papers is None:
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
     with st.status("📚 Fetching & ranking best papers...", expanded=True) as stbox:
-        for event in graph.stream({"topic": st.session_state.topic}, config=config):
+        # Pass max_results to the graph
+        inputs = {
+            "topic": st.session_state.topic,
+            "max_results": st.session_state.max_results
+        }
+        # Use inputs variable here
+        for event in graph.stream(inputs, config=config):
             for node, values in event.items():
 
                 if node == "fetch":
@@ -114,10 +133,21 @@ if st.session_state.research_started and st.session_state.ranked_papers is None:
 if st.session_state.ranked_papers:
     st.markdown('<div class="section-header">1️⃣ Top Ranked Papers</div>', unsafe_allow_html=True)
 
-    for p in st.session_state.ranked_papers[:5]:
+    for p in st.session_state.ranked_papers:
+        # Format authors list nicely
+        authors_text = ", ".join(p.get('authors',[])) if isinstance(p.get('authors'),list) else str(p.get('authors','Unknown'))
         st.markdown(f"""
         <div class="paper-card">
             <h5>{p["title"]}</h5>
+            <p style="color: #a1a1aa; margin-bottom: 5px;">
+                <b>✍ Authors:</b> {authors_text}
+            </p>
+            <details>
+                <summary style="cursor:pointer; color:#6366f1;"><b>📜 Read Summary</b></summary>
+                <p style="margin-top:5px; font-style:italic;">{p["summary"]}</p>
+            </details>
+            <br>
+
             <p><b>Score:</b> {p["finalscore"]:.2f} | <b>Citations:</b> {p["citationcount"]}</p>
             <a href="{p['pdf_url']}" target="_blank" style="color:#6366f1;">🔗 PDF</a>
         </div>
