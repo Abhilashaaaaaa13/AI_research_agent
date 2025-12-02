@@ -5,23 +5,27 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
-# --- 1. YAHAN SE FETCH HOTE HAIN FUNCTIONS ---
+# --- 1. IMPORT FUNCTIONS ---
 from fetcher import fetch_recent_papers
 from ranking_engine import rank_papers
 from insight_engine import (
     load_model,
     refine_topic_query,
     filter_papers_with_llm,
-    find_trends,              # Trends function
-    find_gaps_with_citations, # Gaps function
-    suggest_roadmap,         # Roadmap function
-    generate_final_summary,   # Summary function
-    answer_user_query         # Chatbot function
+    find_trends,              
+    find_gaps_with_citations, 
+    suggest_roadmap,         
+    generate_final_summary,   
+    answer_user_query         
 )
+
+# Initialize LLM
+llm = load_model()
 
 # --- 2. Define State ---
 class AgentState(TypedDict):
     topic: str
+    max_results: int
     refined_queries: List[str]
     raw_papers: List[dict]
     ranked_papers: List[dict]
@@ -32,10 +36,8 @@ class AgentState(TypedDict):
     status: str
     messages: Annotated[List[BaseMessage], operator.add]
 
-# Initialize LLM
-llm = load_model()
+# --- 3. Nodes ---
 
-# --- 3. Nodes (Jo Functions ko call karte hain) ---
 def refine_node(state: AgentState):
     topic = state["topic"]
     queries = refine_topic_query(topic, llm)
@@ -43,52 +45,84 @@ def refine_node(state: AgentState):
 
 def fetch_node(state: AgentState):
     queries = state["refined_queries"]
-    papers = fetch_recent_papers(queries, max_results=8)
-    return {"raw_papers": papers, "status": f"Fetched {len(papers)} Papers"}
+    user_request = state.get("max_results")
+    
+    # Safety: If user_request is missing, default to 5
+    if user_request is None:
+        user_request = 5
+        
+    # We fetch wide and filter narrow
+    fetch_limit = user_request * 3
+    fetch_limit = min(fetch_limit, 30)
+    
+    print(f"DEBUG: User wants {user_request}, Fetching {fetch_limit} for filtering")
+    
+    papers = fetch_recent_papers(queries, max_results=fetch_limit)
+    return {"raw_papers": papers, "status": f"Fetched {len(papers)} Raw Papers"}
 
 def rank_node(state: AgentState):
     raw_papers = state["raw_papers"]
     topic = state["topic"]
+    user_request = state.get("max_results")
+    
+    # Safety check
+    if user_request is None:
+        user_request = 5
 
-    # DataFrame conversion zaroori hai kyunki insight_engine DF expect karta hai
+    # DataFrame conversion
     df_raw = pd.DataFrame(raw_papers)
+    
+    if df_raw.empty:
+        return {"ranked_papers": [], "status": "No Papers Found"}
 
     # Column rename for safety
     df_raw = df_raw.rename(columns={'title': 'Title', 'summary': 'Summary', 'id': 'ArXiv ID'})
 
-    # Insight Engine ka function call
+    # Insight Engine call
     df_scored = filter_papers_with_llm(df_raw, topic, llm)
 
-    # Ranking Engine ka function call
+    # Ranking Engine call
     final_ranked = rank_papers(df_scored, query=topic)
+    
+    # Cut the list to exactly what user asked for
+    # FIX: final_ranked is a list, so we slice it. (Previous code tried to call it like a function)
+    top_papers = final_ranked[:user_request]
 
-    return {"ranked_papers": final_ranked, "status": "Ranked Papers"}
+    return {"ranked_papers": top_papers, "status": "Ranked Papers"}
 
 def trends_node(state: AgentState):
     papers = state["ranked_papers"]
     df_ranked = pd.DataFrame(papers)
-    df_ranked = df_ranked.rename(columns={'title': 'Title', 'summary': 'Summary'})
-
-    # Yahan 'insight_engine' se 'find_trends' use ho raha hai
-    trends = find_trends(df_ranked, llm)
+    
+    if not df_ranked.empty:
+        df_ranked = df_ranked.rename(columns={'title': 'Title', 'summary': 'Summary'})
+        trends = find_trends(df_ranked, llm)
+    else:
+        trends = "Not enough papers to find trends."
+        
     return {"trends": trends, "status": "Identified Trends"}
 
 def gaps_node(state: AgentState):
     papers = state["ranked_papers"]
     df_ranked = pd.DataFrame(papers)
-    df_ranked = df_ranked.rename(columns={'title': 'Title', 'summary': 'Summary', 'pdf_url': 'pdf_url'})
-
-    # Yahan 'insight_engine' se 'find_gaps_with_citations' use ho raha hai
-    gaps = find_gaps_with_citations(df_ranked, llm)
-    # gaps is expected to be a list of {"source": <title>, "gaps": <text>}
+    
+    if not df_ranked.empty:
+        df_ranked = df_ranked.rename(columns={'title': 'Title', 'summary': 'Summary', 'pdf_url': 'pdf_url'})
+        gaps = find_gaps_with_citations(df_ranked, llm)
+    else:
+        gaps = []
+        
     return {"gaps": gaps, "status": "Analyzed PDFs for Gaps"}
 
 def roadmap_node(state: AgentState):
     topic = state["topic"]
     gaps = state["gaps"]
 
-    # Yahan 'insight_engine' se 'suggest_roadmap' use ho raha hai
-    roadmap = suggest_roadmap(topic, gaps, llm)
+    if gaps:
+        roadmap = suggest_roadmap(topic, gaps, llm)
+    else:
+        roadmap = "No gaps found to generate roadmap."
+        
     return {"roadmap": roadmap, "status": "Generated Research Roadmap"}
 
 def summary_node(state: AgentState):
@@ -99,7 +133,6 @@ def summary_node(state: AgentState):
         "final_plan": state["roadmap"]
     }
 
-    # Yahan 'insight_engine' se 'generate_final_summary' use ho raha hai
     report = generate_final_summary(result_dict, llm)
     return {"analysis_report": report, "status": "Final Report Ready"}
 
@@ -109,7 +142,6 @@ def chatbot_node(state: AgentState):
     last_user_msg = messages[-1]
     query = last_user_msg.content if isinstance(last_user_msg, HumanMessage) else str(last_user_msg.content)
 
-    # Yahan 'insight_engine' se 'answer_user_query' use ho raha hai
     response_text = answer_user_query(query, ranked_papers, llm)
 
     return {
@@ -120,7 +152,7 @@ def chatbot_node(state: AgentState):
 # --- 4. Build Graph (Routing) ---
 workflow = StateGraph(AgentState)
 
-# Nodes add kar rahe hain (Unique names ke saath)
+# Nodes
 workflow.add_node("refine", refine_node)
 workflow.add_node("fetch", fetch_node)
 workflow.add_node("rank", rank_node)
@@ -130,7 +162,7 @@ workflow.add_node("create_roadmap", roadmap_node)
 workflow.add_node("summary", summary_node)
 workflow.add_node("chatbot", chatbot_node)
 
-# Conditional Logic for Chat vs Research
+# Conditional Logic
 def route_input(state: AgentState):
     if state.get("messages") and len(state["messages"]) > 0:
         if state.get("ranked_papers"):

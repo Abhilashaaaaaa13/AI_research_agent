@@ -24,7 +24,7 @@ def fetch_openalex_papers(query:str,max_results:int=5)->List[Dict]:
     params = {
         "search":query,
         "per_page":max_results,
-        "filter": "from_publication_date:2023-01-01",  # Keep it recent
+        "filter": "from_publication_date:2020-01-01",
         "sort": "relevance_score:desc",
     }
     try:
@@ -60,7 +60,7 @@ def fetch_openalex_papers(query:str,max_results:int=5)->List[Dict]:
                     "summary": abstract,
                     "pdf_url": pdf_url,
                     # OpenAlex gives real citation counts
-                    "citationCount": item.get('cited_by_count', 0) 
+                    "citationcount": item.get('cited_by_count', 0) 
                 })
     except Exception as e:
         print(f"⚠️ OpenAlex Error for '{query}': {e}")
@@ -90,7 +90,7 @@ def fetch_arxiv_papers(query: str, max_results: int = 5) -> List[Dict]:
                 "summary": result.summary.replace('\n', ' '),
                 "pdf_url": result.pdf_url,
                 # ArXiv API doesn't provide citation counts, defaulting to 0
-                "citationCount": 0 
+                "citationcount": 0 
             })
     except Exception as e:
         print(f"⚠️ ArXiv Error for '{query}': {e}")

@@ -120,11 +120,11 @@ def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, weights
 
     # 7. Weighted Scoring Formula
     default_weights = {
-        'relevance': 0.35,  # Content match is most important
+        'relevance': 0.50,  # Content match is most important
         'novelty': 0.10,    # Reward unique papers
-        'llm_score': 0.35,  # Trust Gemini's filter
+        'llm_score': 0.30,  # Trust Gemini's filter
         'venue': 0.05,
-        'citations': 0.15   # Trust impactful papers
+        'citations': 0.05   # Trust impactful papers
     }
     final_weights = {**default_weights, **(weights or {})}
 
