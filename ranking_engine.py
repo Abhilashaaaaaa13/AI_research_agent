@@ -7,8 +7,6 @@ from typing import List, Dict, Optional, Union
 import streamlit as st # REQUIRED for caching
 
 # --- 1. OPTIMIZATION: Cache the AI Model ---
-# This prevents the app from reloading the model (2GB+) on every interaction.
-# Without this, your app will freeze for 3-5 seconds on every button click.
 @st.cache_resource
 def load_embedding_model():
     try:
@@ -79,8 +77,7 @@ def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, weights
     # 2. Standardize Columns
     df.columns = [c.lower() for c in df.columns]
     
-    # --- CRITICAL FIX: Force Numeric Types ---
-    # APIs often send numbers as strings ("10" instead of 10). This fixes math errors.
+    # Force Numeric Types
     df['citationcount'] = pd.to_numeric(df.get('citationcount', 0), errors='coerce').fillna(0)
     df['llm_score'] = pd.to_numeric(df.get('llm_score', 0), errors='coerce').fillna(0)
     
@@ -111,20 +108,20 @@ def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, weights
 
     df['norm_relevance'] = safe_normalize(df['relevance'])
     df['norm_novelty'] = safe_normalize(df['novelty'])
-    df['norm_llm_score'] = df['llm_score'] / 5.0 
+    df['norm_llm_score'] = df['llm_score'] / 10.0  # Assumes LLM score is 0-10
     df['norm_venue'] = df['venuescore']
     
-    # Log transform citations (handle 0 vs 1000 citations smoothly)
+    # Log transform citations
     df['log_citations'] = np.log1p(df['citationcount'])
     df['norm_citations'] = safe_normalize(df['log_citations'])
 
-    # 7. Weighted Scoring Formula
+    # 7. Weighted Scoring Formula (High Relevance Preference)
     default_weights = {
-        'relevance': 0.50,  # Content match is most important
-        'novelty': 0.10,    # Reward unique papers
-        'llm_score': 0.30,  # Trust Gemini's filter
+        'relevance': 0.60,  # Increased Weight (High Priority)
+        'llm_score': 0.20,  # Quality Check
+        'novelty': 0.10,    # Unique insights
         'venue': 0.05,
-        'citations': 0.05   # Trust impactful papers
+        'citations': 0.05
     }
     final_weights = {**default_weights, **(weights or {})}
 
@@ -134,7 +131,7 @@ def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, weights
         final_weights['llm_score'] * df['norm_llm_score'] +
         final_weights['venue'] * df['norm_venue'] +
         final_weights['citations'] * df['norm_citations']
-    )
+    ) * 5.0 # Scale to 5
 
     # 8. Sort and Return
     df = df.sort_values(by='finalscore', ascending=False).reset_index(drop=True)
