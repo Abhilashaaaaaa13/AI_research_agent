@@ -62,12 +62,39 @@ def get_full_text(pdf_url: str) -> str:
     except Exception:
         return None
 
+def extract_keywords(topic: str, llm, max_terms: int = 8) -> List[str]:
+    prompt = f"""
+Extract {max_terms} technical and domain-specific keywords for searching research
+papers directly related to: "{topic}"
+
+RULES:
+- Focus on core terminology used in REAL research papers
+- Include specific methods, applications, datasets, and evaluation metrics
+- No generic words like "survey", "technology", "deep learning"
+- Respond ONLY as a Python list of strings
+
+Example:
+["lung nodule detection", "CT scan anomaly", "autoencoder", "unsupervised"]
+"""
+    try:
+        keywords = json.loads(generate_response(prompt, llm, json_mode=True))
+        return [k.lower().strip() for k in keywords]
+    except:
+        return [topic.lower()]
+
+def keyword_filter(papers_df: pd.DataFrame, keywords: List[str]) -> pd.DataFrame:
+    def match(row):
+        text = (row['Title'] + " " + row['Summary']).lower()
+        return any(kw in text for kw in keywords)
+    return papers_df[papers_df.apply(match, axis=1)].reset_index(drop=True)
 
 # ------------------ LLM-Based Paper Filtering ------------------
 def filter_papers_with_llm(papers_df: pd.DataFrame, topic: str, client, top_n: int = 20):
+    """Rate papers and always return up to top_n by relevance."""
     if papers_df.empty:
-        return papers_df.assign(LLM_Score=0.0)
-
+        papers_df['LLM_Score'] = 0.0
+        return papers_df.head(top_n)
+    
     top_papers = papers_df.head(top_n).reset_index(drop=True).copy()
 
     paper_context = "\n\n".join(
@@ -83,23 +110,17 @@ Topic of Interest: "{topic}"
 TASK:
 For EACH paper below:
 - Read ONLY the title and abstract.
-- Assign a relevance score from 1 to 5 based on how well the paper fits the topic.
+- Assign a relevance score from 1 to 10 based on how well the paper fits the topic.
 
 SCORING GUIDELINES:
-5 = Directly focused on the topic and addresses it in depth.
-4 = Strongly relevant; topic is a major part of the study.
-3 = Indirectly relevant; related methods or applications.
-2 = Very weak relevance; only small or hypothetical connection.
-1 = Not relevant at all.
+-10: Perfect match
+-8-9: Highly relevant
+-5-7: Related but broad
+-0-4: Irrelevant
 
 RESPONSE FORMAT:
 Output ONLY a JSON array with objects like:
-[
-  {{ "ID": 0, "Score": 5 }},
-  {{ "ID": 1, "Score": 3 }}
-]
-
-NO text before or after JSON.
+[{{ "ID": 0, "Score": 9 }}, {{ "ID": 1, "Score": 3 }}]
 
 PAPERS:
 {paper_context}
@@ -110,26 +131,32 @@ PAPERS:
         result = json.loads(result_text)
         score_map = {item['ID']: item['Score'] for item in result}
         top_papers['LLM_Score'] = top_papers.index.map(score_map).fillna(0)
-        scored_df = papers_df.merge(top_papers[['ArXiv ID', 'LLM_Score']], on='ArXiv ID', how='left')
-        scored_df['LLM_Score'] = scored_df['LLM_Score'].fillna(0)
-        return scored_df
+
+        # Sort by score descending
+        top_papers = top_papers.sort_values(by='LLM_Score', ascending=False).reset_index(drop=True)
+
+        # Take exactly top_n
+        return top_papers.head(top_n)
+
     except Exception:
-        return papers_df.assign(LLM_Score=2.5)
+        # Fallback: assign default score, return top_n
+        top_papers['LLM_Score'] = 5.0
+        return top_papers.head(top_n)
+
+
 
 
 # ------------------ Topic Query Refinement ------------------
 def refine_topic_query(raw_topic: str, llm) -> List[str]:
+    """Genertes SPECIFIC, TECHNICAL search queries. Avoids broad terms like 'Intro to AI"""
     prompt = f"""
 You are a research query optimization system.
-
-Convert the topic below into 3–5 highly effective academic search queries
-that:
-- Include domain-specific keywords and synonyms
-- Avoid being too broad
-- Are suitable for Google Scholar, ArXiv, and Scopus
-
+Convert the user's topic into 3 specific, technical search queries for ArXiv/Google Scholar.
 Topic: "{raw_topic}"
-
+RULES:
+    1. Use domain-specific terminology (e.g., instead of "AI code", use "LLM code generation capabilities").
+    2. Focus on "State of the Art", "Survey", "Implementation", or "Novel Architecture".
+    3. Do NOT make broad queries. Be precise.
 Output ONLY a valid JSON list of query strings. No extra text.
 """
 
@@ -139,6 +166,31 @@ Output ONLY a valid JSON list of query strings. No extra text.
     except Exception:
         return [raw_topic]
 
+def answer_user_query(user_query: str, papers: List[Dict], llm) -> str:
+    if not papers:
+        return "No highly relevant papers were found for this query."
+
+    source_context = "\n\n".join([
+        f"Paper: {p['Title']}\nAbstract: {p['Summary'][:700]}"
+        for p in papers
+    ])
+
+    prompt = f"""
+Answer ONLY if information exists in the provided papers.
+
+User Question: "{user_query}"
+
+RULES:
+- Cite ONLY the relevant papers directly
+- If vague or unsupported: respond 
+  "The current papers do not provide this information."
+- Max: 5 concise bullet points
+
+Context:
+{source_context}
+"""
+
+    return generate_response(prompt, llm)
 
 # ------------------ Trend Analysis ------------------
 def find_trends(top_papers_df: pd.DataFrame, llm, num_trends: int = 3) -> str:
