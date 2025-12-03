@@ -2,6 +2,7 @@ import arxiv
 import pandas as pd
 from typing import List,Dict
 import requests
+import re
 OPENALEX_URL = "https://api.openalex.org/works"
 
 def reconstruct_abstract(inverted_index: Dict)->str:
@@ -18,6 +19,10 @@ def reconstruct_abstract(inverted_index: Dict)->str:
     sorted_words = sorted(word_list,key=lambda x:x[0])
     return " ".join([word for _, word in sorted_words])
 
+def normalize_title(title:str)->str:
+    """Removes symbols and casing to find duplicates"""
+    if not title : return ""
+    return re.sub(r'[^a-z0-9]','',title.lower())
 def fetch_openalex_papers(query:str,max_results:int=5)->List[Dict]:
     """drectly hits the openalex api endpoint"""
     papers=[]

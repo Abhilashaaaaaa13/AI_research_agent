@@ -8,7 +8,7 @@ st.set_page_config(
     page_title="Deep Research Agent",
     page_icon="🧬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" # Sidebar ko by default band rakha hai
 )
 
 from agent import graph
@@ -44,6 +44,7 @@ st.markdown("""
 }
 .paper-card h5 { color: white !important; font-weight: 700; margin-bottom: 6px; }
 .paper-card p { color: #d1d5db !important; font-size: 0.9em; margin: 0; }
+.paper-meta { font-size: 0.85em; color: #9ca3af !important; margin-bottom: 10px !important; }
 
 /* Buttons */
 div.stButton > button {
@@ -73,12 +74,9 @@ for key in ["show_trends", "show_gaps", "show_roadmap", "show_summary"]:
     if key not in st.session_state:
         st.session_state[key] = False
 
-# --- Sidebar ---
-with st.sidebar:
-    st.title("🧬 Control Panel")
-    if st.button("🆕 New Research", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
+# --- (Sidebar Code Removed as per your preference) ---
+# Agar "New Research" button chahiye to main page pe laga sakte hain,
+# par abhi ke liye sidebar hata diya hai taki clean dikhe.
 
 # --- Input UI ---
 if not st.session_state.research_started:
@@ -112,17 +110,17 @@ if st.session_state.research_started and st.session_state.ranked_papers is None:
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
     with st.status("📚 Fetching & ranking best papers...", expanded=True) as stbox:
-        # Pass max_results to the graph
+        # Pass inputs correctly
         inputs = {
             "topic": st.session_state.topic,
             "max_results": st.session_state.max_results
         }
-        # Use inputs variable here
+        
         for event in graph.stream(inputs, config=config):
             for node, values in event.items():
 
                 if node == "fetch":
-                    stbox.write("Fetched raw papers...")
+                    stbox.write(f"Fetched raw papers...")
                 if node == "rank":
                     st.session_state.ranked_papers = values["ranked_papers"]
                     stbox.write("Ranked based on relevance & citations 📈")
@@ -130,33 +128,62 @@ if st.session_state.research_started and st.session_state.ranked_papers is None:
                     st.rerun()
 
 # --- Step 1 UI Display ---
+# --- Step 1 UI Display ---
 if st.session_state.ranked_papers:
     st.markdown('<div class="section-header">1️⃣ Top Ranked Papers</div>', unsafe_allow_html=True)
 
     for p in st.session_state.ranked_papers:
-        # Format authors list nicely
-        authors_text = ", ".join(p.get('authors',[])) if isinstance(p.get('authors'),list) else str(p.get('authors','Unknown'))
-        st.markdown(f"""
+
+        # Safety Handling
+        raw_authors = p.get('authors')
+        if isinstance(raw_authors, list):
+            authors_text = ", ".join([str(a) for a in raw_authors if a])
+        elif isinstance(raw_authors, str):
+            authors_text = raw_authors
+        else:
+            authors_text = "Unknown Authors"
+
+        pub_date = p.get('published', 'Unknown Date')
+        citations = p.get('citationcount', 0) or 0
+        score = p.get('finalscore', 0) or 0
+        pdf_link = p.get('pdf_url', '#')
+
+        card_html = f"""
         <div class="paper-card">
-            <h5>{p["title"]}</h5>
-            <p style="color: #a1a1aa; margin-bottom: 5px;">
+            <h5>{p['title']}</h5>
+            <p class="paper-meta">
+                <b>🗓 Published:</b> {pub_date} &nbsp;|&nbsp;
                 <b>✍ Authors:</b> {authors_text}
             </p>
             <details>
                 <summary style="cursor:pointer; color:#6366f1;"><b>📜 Read Summary</b></summary>
-                <p style="margin-top:5px; font-style:italic;">{p["summary"]}</p>
+                <p style="margin-top:5px; font-style:italic;">{p['summary']}</p>
             </details>
             <br>
-
-            <p><b>Score:</b> {p["finalscore"]:.2f} | <b>Citations:</b> {p["citationcount"]}</p>
-            <a href="{p['pdf_url']}" target="_blank" style="color:#6366f1;">🔗 PDF</a>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>
+                    <b>⭐ Score:</b> {score:.2f} &nbsp;|&nbsp;
+                    <b>📊 Citations:</b> {citations}
+                </span>
+                <a href="{pdf_link}" target="_blank"
+                    style="background-color:#6366f1; color:white; padding:6px 12px; 
+                    border-radius:5px; text-decoration:none;">
+                    🔗 Open PDF
+                </a>
+            </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
 
+        st.markdown(card_html, unsafe_allow_html=True)
     if not st.session_state.show_trends:
-        if st.button("📈 Extract Trends"):
+        if st.button("📉 Extract Trends"):
             st.session_state.show_trends = True
-            st.rerun()
+            st.session_state.trends_content = None
+            st.rerun()    
+
+    
+# ---- USER CLICKS THIS BUTTON TO EXTRACT TRENDS ----
+
 
 # --- Step 2: Trends ---
 if st.session_state.show_trends and st.session_state.trends_content is None:
