@@ -16,7 +16,9 @@ from insight_engine import (
     find_gaps_with_citations, 
     suggest_roadmap,         
     generate_final_summary,   
-    answer_user_query         
+    answer_user_query,
+    extract_keywords,       # added
+    keyword_filter          # added
 )
 
 # Initialize LLM
@@ -43,62 +45,56 @@ def refine_node(state: AgentState):
     queries = refine_topic_query(topic, llm)
     return {"refined_queries": queries, "status": "Refined Queries"}
 
-def fetch_node(state: AgentState):
-    queries = state["refined_queries"]
-    user_request = state.get("max_results")
-    
-    # Safety: If user_request is missing, default to 5
-    if user_request is None:
-        user_request = 5
-        
-    # We fetch wide and filter narrow
-    fetch_limit = user_request * 3
-    fetch_limit = min(fetch_limit, 30)
-    
-    print(f"DEBUG: User wants {user_request}, Fetching {fetch_limit} for filtering")
-    
-    papers = fetch_recent_papers(queries, max_results=fetch_limit)
-    return {"raw_papers": papers, "status": f"Fetched {len(papers)} Raw Papers"}
-
 def rank_node(state: AgentState):
     raw_papers = state["raw_papers"]
     topic = state["topic"]
-    user_request = state.get("max_results")
-    
-    # Safety check
-    if user_request is None:
-        user_request = 5
+    user_request = state.get("max_results") or 5
 
-    # DataFrame conversion
+    # convert to DataFrame
     df_raw = pd.DataFrame(raw_papers)
-    
     if df_raw.empty:
         return {"ranked_papers": [], "status": "No Papers Found"}
 
-    # Column rename for safety
     df_raw = df_raw.rename(columns={'title': 'Title', 'summary': 'Summary', 'id': 'ArXiv ID'})
 
-    # Insight Engine call
+    # filter using LLM
     df_scored = filter_papers_with_llm(df_raw, topic, llm)
 
-    # Ranking Engine call
+    # rank papers
     final_ranked = rank_papers(df_scored, query=topic)
-    
-    # Cut the list to exactly what user asked for
-    # FIX: final_ranked is a list, so we slice it. (Previous code tried to call it like a function)
+
+    # slice top N
     top_papers = final_ranked[:user_request]
 
     return {"ranked_papers": top_papers, "status": "Ranked Papers"}
+
+        
+
+def fetch_node(state: AgentState):
+    queries = state["refined_queries"]
+    user_request = state.get("max_results") or 5
+
+    fetch_limit = min(user_request * 3, 50)  # fetch more to allow filtering
+
+    papers = fetch_recent_papers(queries, max_results=fetch_limit)
+
+    # fallback if fetch fails
+    if not papers:
+        print("DEBUG: No papers fetched, adding dummy fallback")
+        papers = [{"title": state["topic"], "summary": "No papers found", "id": "N/A", "pdf_url": None}]
+
+    return {"raw_papers": papers, "status": f"Fetched {len(papers)} Raw Papers"}
+
 
 def trends_node(state: AgentState):
     papers = state["ranked_papers"]
     df_ranked = pd.DataFrame(papers)
     
-    if not df_ranked.empty:
+    if df_ranked.empty or len(df_ranked) < 3:  # safety check
+        trends = "Not enough papers to find trends."
+    else:
         df_ranked = df_ranked.rename(columns={'title': 'Title', 'summary': 'Summary'})
         trends = find_trends(df_ranked, llm)
-    else:
-        trends = "Not enough papers to find trends."
         
     return {"trends": trends, "status": "Identified Trends"}
 
@@ -152,7 +148,6 @@ def chatbot_node(state: AgentState):
 # --- 4. Build Graph (Routing) ---
 workflow = StateGraph(AgentState)
 
-# Nodes
 workflow.add_node("refine", refine_node)
 workflow.add_node("fetch", fetch_node)
 workflow.add_node("rank", rank_node)
@@ -162,7 +157,6 @@ workflow.add_node("create_roadmap", roadmap_node)
 workflow.add_node("summary", summary_node)
 workflow.add_node("chatbot", chatbot_node)
 
-# Conditional Logic
 def route_input(state: AgentState):
     if state.get("messages") and len(state["messages"]) > 0:
         if state.get("ranked_papers"):
@@ -177,7 +171,6 @@ workflow.set_conditional_entry_point(
     }
 )
 
-# Flow Connections
 workflow.add_edge("refine", "fetch")
 workflow.add_edge("fetch", "rank")
 workflow.add_edge("rank", "extract_trends")
