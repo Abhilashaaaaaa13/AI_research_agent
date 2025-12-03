@@ -193,32 +193,57 @@ Context:
     return generate_response(prompt, llm)
 
 # ------------------ Trend Analysis ------------------
-def find_trends(top_papers_df: pd.DataFrame, llm, num_trends: int = 3) -> str:
+def find_trends(top_papers_df: pd.DataFrame, llm, num_trends: int = 5) -> str:
+    """
+    Extracts top N trends from provided papers with source citation.
+    """
+    # Use all papers, not just top 10
     paper_context = "\n\n".join(
-        [f"- {row['Title']}: {row['Summary'][:700]}"
-         for _, row in top_papers_df.head(10).iterrows()]
+        [f"- {row['Title']}: {row['Summary'][:700]}" for _, row in top_papers_df.iterrows()]
     )
 
     prompt = f"""
-You are analyzing emerging research trends from AI papers.
+You are an expert research analyst.
 
-Identify the TOP {num_trends} most recurring or growing trends.
+TASK:
+Identify the TOP {num_trends} **specific, emerging, or recurring research trends** 
+in the following AI papers. For each trend, provide:
 
-For each trend, provide this structure:
 - Trend_Name: short, 2–5 words
-- Description: 2 short sentences
-- Supporting_Papers: List of 2–3 titles
+- Description: 1–2 sentences strictly based on the papers
+- Supporting_Papers: List of titles of papers where this trend is visible
 
-Output format example:
-1. Trend_Name: XYZ
-   Description: ...
-   Supporting_Papers: ["Paper A", "Paper B"]
+RULES:
+- Use ONLY the provided papers. Do NOT hallucinate.
+- Trends must be concise, actionable, and technical.
+- Response format: JSON list of objects like:
+[
+  {{
+    "Trend_Name": "XYZ",
+    "Description": "...",
+    "Supporting_Papers": ["Paper A", "Paper B"]
+  }},
+  ...
+]
 
-Use only the provided papers:
+PAPERS:
 {paper_context}
 """
 
-    return generate_response(prompt, llm)
+    # Call LLM and parse response
+    response_text = generate_response(prompt, llm, json_mode=True)
+    try:
+        trends_list = json.loads(response_text)
+        # Format as string for display
+        formatted_trends = ""
+        for idx, t in enumerate(trends_list, 1):
+            formatted_trends += f"{idx}. {t['Trend_Name']}\n"
+            formatted_trends += f"   Description: {t['Description']}\n"
+            formatted_trends += f"   Source Papers: {', '.join(t['Supporting_Papers'])}\n\n"
+        return formatted_trends.strip()
+    except Exception:
+        return "Could not extract trends properly. Ensure papers have abstracts and summaries."
+
 
 
 # ------------------ Gap Identification ------------------
