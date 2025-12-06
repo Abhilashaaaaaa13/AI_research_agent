@@ -8,6 +8,13 @@ from typing import List, Dict, Any
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
+# --- IMPORT HELPERS ---
+try:
+    import fetcher
+    import ranking_engine
+except ImportError:
+    print("⚠️ Warning: fetcher.py or ranking_engine.py not found.")
+
 load_dotenv()
 
 # ------------------ LLM Client ------------------
@@ -21,7 +28,7 @@ def load_model():
     return ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         google_api_key=api_key,
-        temperature=0.2,  # Lower temp for factual output
+        temperature=0.2,
     )
 
 def generate_response(prompt: str, llm, json_mode: bool = False) -> str:
@@ -62,65 +69,76 @@ def get_full_text(pdf_url: str) -> str:
     except Exception:
         return None
 
-def extract_keywords(topic: str, llm, max_terms: int = 8) -> List[str]:
+# ------------------ Keyword Utilities (UNIVERSAL) ------------------
+def extract_keywords(topic: str, llm, max_terms: int = 6) -> List[str]:
+    # Updated prompt to handle ANY domain
     prompt = f"""
-Extract {max_terms} technical and domain-specific keywords for searching research
-papers directly related to: "{topic}"
+Extract {max_terms} specific keywords for: "{topic}"
 
 RULES:
-- Focus on core terminology used in REAL research papers
-- Include specific methods, applications, datasets, and evaluation metrics
-- No generic words like "survey", "technology", "deep learning"
-- Respond ONLY as a Python list of strings
+- Adapt to the specific domain (Physics, CS, Medicine, History, etc.).
+- Include ONLY the most critical domain nouns.
+- Do NOT include generic words like "system", "approach", "using".
+- Respond ONLY as a Python list of strings.
 
-Example:
-["lung nodule detection", "CT scan anomaly", "autoencoder", "unsupervised"]
+Example (Physics): ["quantum", "entanglement", "superposition"]
+Example (Medicine): ["cardiology", "arrhythmia", "atrial"]
 """
     try:
         keywords = json.loads(generate_response(prompt, llm, json_mode=True))
         return [k.lower().strip() for k in keywords]
     except:
-        return [topic.lower()]
+        return [topic.split()[0].lower()]
 
 def keyword_filter(papers_df: pd.DataFrame, keywords: List[str]) -> pd.DataFrame:
-    def match(row):
-        text = (row['Title'] + " " + row['Summary']).lower()
-        return any(kw in text for kw in keywords)
-    return papers_df[papers_df.apply(match, axis=1)].reset_index(drop=True)
-
-# ------------------ LLM-Based Paper Filtering ------------------
-def filter_papers_with_llm(papers_df: pd.DataFrame, topic: str, client, top_n: int = 20):
-    """Rate papers and always return up to top_n by relevance."""
     if papers_df.empty:
-        papers_df['LLM_Score'] = 0.0
+        return papers_df
+    
+    def match(row):
+        t = str(row.get('title', row.get('Title', '')))
+        s = str(row.get('summary', row.get('Summary', '')))
+        text = (t + " " + s).lower()
+        return any(kw in text for kw in keywords)
+    
+    filtered = papers_df[papers_df.apply(match, axis=1)].reset_index(drop=True)
+    
+    # --- CRITICAL FIX: SAFETY FALLBACK ---
+    # If the filter removes ALL papers (too strict), return the original list.
+    if filtered.empty:
+        print("⚠️ Keyword filter was too strict. Returning all fetched papers.")
+        return papers_df
+        
+    return filtered
+
+# ------------------ LLM-Based Paper Filtering (UNIVERSAL) ------------------
+def filter_papers_with_llm(papers_df: pd.DataFrame, topic: str, client, top_n: int = 20):
+    """Rate papers and return dataframe with 'llm_score'."""
+    if papers_df.empty:
+        papers_df['llm_score'] = 0.0
         return papers_df.head(top_n)
     
     top_papers = papers_df.head(top_n).reset_index(drop=True).copy()
 
     paper_context = "\n\n".join(
-        [f"ID:{i}\nTitle:{row['Title']}\nAbstract:{row['Summary'][:600]}"
+        [f"ID:{i}\nTitle:{row.get('title', row.get('Title', 'Untitled'))}\nAbstract:{str(row.get('summary', row.get('Summary', '')))[:600]}"
          for i, (_, row) in enumerate(top_papers.iterrows())]
     )
 
+    # Updated Prompt to be Domain-Agnostic
     prompt = f"""
-You are a research paper relevance evaluator.
-
-Topic of Interest: "{topic}"
+You are a research relevance evaluator.
+Topic: "{topic}"
 
 TASK:
-For EACH paper below:
-- Read ONLY the title and abstract.
-- Assign a relevance score from 1 to 10 based on how well the paper fits the topic.
+Score each paper (0-10) based on relevance to the topic.
 
-SCORING GUIDELINES:
--10: Perfect match
--8-9: Highly relevant
--5-7: Related but broad
--0-4: Irrelevant
+SCORING:
+- 0-3: Paper is about a completely different field or too generic.
+- 4-7: Paper is related but not a direct match.
+- 8-10: Paper is a precise match for the user's specific query.
 
 RESPONSE FORMAT:
-Output ONLY a JSON array with objects like:
-[{{ "ID": 0, "Score": 9 }}, {{ "ID": 1, "Score": 3 }}]
+Output ONLY a JSON array: [{{ "ID": 0, "Score": 9 }}, {{ "ID": 1, "Score": 0 }}]
 
 PAPERS:
 {paper_context}
@@ -130,154 +148,105 @@ PAPERS:
         result_text = generate_response(prompt, client, json_mode=True)
         result = json.loads(result_text)
         score_map = {item['ID']: item['Score'] for item in result}
-        top_papers['LLM_Score'] = top_papers.index.map(score_map).fillna(0)
-
-        # Sort by score descending
-        top_papers = top_papers.sort_values(by='LLM_Score', ascending=False).reset_index(drop=True)
-
-        # Take exactly top_n
+        
+        top_papers['llm_score'] = top_papers.index.map(score_map).fillna(0)
+        top_papers = top_papers.sort_values(by='llm_score', ascending=False).reset_index(drop=True)
         return top_papers.head(top_n)
 
-    except Exception:
-        # Fallback: assign default score, return top_n
-        top_papers['LLM_Score'] = 5.0
+    except Exception as e:
+        print(f"⚠️ Error in LLM Scoring: {e}")
+        top_papers['llm_score'] = 5.0
         return top_papers.head(top_n)
 
 
-
-
-# ------------------ Topic Query Refinement ------------------
+# ------------------ Topic Query Refinement (UNIVERSAL) ------------------
 def refine_topic_query(raw_topic: str, llm) -> List[str]:
-    """Genertes SPECIFIC, TECHNICAL search queries. Avoids broad terms like 'Intro to AI"""
     prompt = f"""
-You are a research query optimization system.
-Convert the user's topic into 3 specific, technical search queries for ArXiv/Google Scholar.
-Topic: "{raw_topic}"
-RULES:
-    1. Use domain-specific terminology (e.g., instead of "AI code", use "LLM code generation capabilities").
-    2. Focus on "State of the Art", "Survey", "Implementation", or "Novel Architecture".
-    3. Do NOT make broad queries. Be precise.
-Output ONLY a valid JSON list of query strings. No extra text.
-"""
+You are a research query optimizer.
+Task: Create 4 specific, technical search queries for: "{raw_topic}"
 
+RULES:
+- Adapt to the specific domain (e.g., if Physics, use physics terminology; if AI, use CS terminology).
+- Ensure queries cover "State of the Art", "Review/Survey", and "Specific Implementations".
+- Output ONLY a valid JSON list of strings.
+"""
     try:
         queries = json.loads(generate_response(prompt, llm, json_mode=True))
         return [q.strip() for q in queries]
     except Exception:
         return [raw_topic]
 
-def answer_user_query(user_query: str, papers: List[Dict], llm) -> str:
-    if not papers:
-        return "No highly relevant papers were found for this query."
-
-    source_context = "\n\n".join([
-        f"Paper: {p['Title']}\nAbstract: {p['Summary'][:700]}"
-        for p in papers
-    ])
-
-    prompt = f"""
-Answer ONLY if information exists in the provided papers.
-
-User Question: "{user_query}"
-
-RULES:
-- Cite ONLY the relevant papers directly
-- If vague or unsupported: respond 
-  "The current papers do not provide this information."
-- Max: 5 concise bullet points
-
-Context:
-{source_context}
-"""
-
-    return generate_response(prompt, llm)
-
 # ------------------ Trend Analysis ------------------
-def find_trends(top_papers_df: pd.DataFrame, llm, num_trends: int = 5) -> str:
+# --- Trend Analysis (UPDATED) ---
+def find_trends(top_papers_df: pd.DataFrame, llm, num_trends: int = 3) -> str:
     """
-    Extracts top N trends from provided papers with source citation.
+    Extracts specific trends from the provided papers.
     """
-    # Use all papers, not just top 10
+    if top_papers_df.empty:
+        return "No papers available to analyze trends."
+
+    # We only use the papers we already have (Ranked Papers)
     paper_context = "\n\n".join(
-        [f"- {row['Title']}: {row['Summary'][:700]}" for _, row in top_papers_df.iterrows()]
+        [f"- {row.get('title', row.get('Title', 'Untitled'))}: {str(row.get('summary', row.get('Summary', '')))[:700]}" 
+         for _, row in top_papers_df.iterrows()]
     )
 
     prompt = f"""
 You are an expert research analyst.
+TASK: Identify exactly {num_trends} key trends based ONLY on the provided papers.
 
-TASK:
-Identify the TOP {num_trends} **specific, emerging, or recurring research trends** 
-in the following AI papers. For each trend, provide:
+REQUIREMENTS:
+1. **Source**: You must derive trends ONLY from the papers below. Do not use outside knowledge.
+2. **Detail**: Write a distinct, high-quality description (200-400 words) for EACH trend.
+3. **Citations**: You MUST cite the specific papers that support each trend.
 
-- Trend_Name: short, 2–5 words
-- Description: 1–2 sentences strictly based on the papers
-- Supporting_Papers: List of titles of papers where this trend is visible
+FORMAT:
+1. **Trend Name**
+   - **Description**: [200-400 word detailed explanation...]
+   - **Derived From**: [List specific paper titles here]
 
-RULES:
-- Use ONLY the provided papers. Do NOT hallucinate.
-- Trends must be concise, actionable, and technical.
-- Response format: JSON list of objects like:
-[
-  {{
-    "Trend_Name": "XYZ",
-    "Description": "...",
-    "Supporting_Papers": ["Paper A", "Paper B"]
-  }},
-  ...
-]
-
-PAPERS:
+PAPERS TO ANALYZE:
 {paper_context}
 """
 
-    # Call LLM and parse response
-    response_text = generate_response(prompt, llm, json_mode=True)
-    try:
-        trends_list = json.loads(response_text)
-        # Format as string for display
-        formatted_trends = ""
-        for idx, t in enumerate(trends_list, 1):
-            formatted_trends += f"{idx}. {t['Trend_Name']}\n"
-            formatted_trends += f"   Description: {t['Description']}\n"
-            formatted_trends += f"   Source Papers: {', '.join(t['Supporting_Papers'])}\n\n"
-        return formatted_trends.strip()
-    except Exception:
-        return "Could not extract trends properly. Ensure papers have abstracts and summaries."
-
+    return generate_response(prompt, llm)
 
 
 # ------------------ Gap Identification ------------------
 def find_gaps_with_citations(top_papers_df: pd.DataFrame, llm, num_gaps: int = 2):
-    """
-    RETURNS:
-      A list of dicts: [{"source": <paper title>, "gaps": <text>}, ...]
-    NOTE (IMPORTANT): The keys 'source' and 'gaps' are chosen to match the Streamlit UI display.
-    """
     gaps = []
+    # Analyze top 3 ranked papers
     for _, p in top_papers_df.head(3).iterrows():
-        text = get_full_text(p.get('pdf_url'))
+        # Handle PDF and Keys safely
+        pdf_url = p.get('pdf_url', p.get('openAccessPdf', {}).get('url'))
+        text = get_full_text(pdf_url)
+        
         if not text:
-            text = p.get('Summary', '')[:3000]
+            text = str(p.get('summary', p.get('Summary', '')))[:3000]
 
+        title = p.get('title', p.get('Title', 'Unknown Title'))
+
+        # --- ENHANCED PROMPT FOR PRECISION & HIGHLIGHTING ---
         prompt = f"""
-Identify up to {num_gaps} research gaps or limitations in the paper below.
+You are a critical Peer Reviewer evaluating a research paper.
+TASK: Identify {num_gaps} **specific technical limitations, methodological flaws, or unaddressed scopes** in this paper.
 
-RULES:
-- Base findings ONLY on provided text
-- Each gap must be 1–2 concise sentences
-- MUST cite specific hints from the text (but summarize, do not quote directly)
+RULES for OUTPUT:
+1. **Precision**: Do not say "it is slow". Say "suffers from **high latency** in real-time scenarios".
+2. **Highlighting**: You MUST **bold** key technical terms representing the gap.
+3. **Context**: Explain WHY this is a gap based on the provided text.
 
-OUTPUT FORMAT:
-- Gap 1: ...
-- Gap 2: ...
+FORMAT:
+- **Gap 1**: [Description with **bold keywords**]
+- **Gap 2**: [Description with **bold keywords**]
 
-Paper Title: {p['Title']}
-Text: {text[:4000]}
+PAPER TO REVIEW:
+Title: {title}
+Content: {text[:4000]}
 """
 
         response = generate_response(prompt, llm)
-        # Normalize output into the keys that Streamlit expects:
-        gaps.append({"source": p["Title"], "gaps": response})
+        gaps.append({"source": title, "gaps": response})
 
     return gaps
 
@@ -289,43 +258,20 @@ def suggest_roadmap(topic: str, gaps: List[Dict], llm):
     )
 
     prompt = f"""
-You are a PhD research strategist.
-
-Using ONLY the following research gaps:
+Create a 4-step research roadmap based on these gaps:
 {gaps_text}
-
-Create a 4-step research roadmap.  
-Each step must include:
-- Step_Name (2–5 words)
-- Objective (one sentence)
-- What must be done (2 concise bullet points)
-
-Example format:
-1. Step_Name
-   Objective: ...
-   - bullet
-   - bullet
-
-Ensure logical progression from theory → methodology → experiments → evaluation.
 """
-
     return generate_response(prompt, llm)
-
 
 # ------------------ Final Summary ------------------
 def generate_final_summary(result: Dict, llm):
     prompt = f"""
-Create a final research summary including:
-
+Create a final research summary for:
 Topic: {result.get('topic')}
-Key Trends: {result.get('trends')}
-Most Critical Gaps: {result.get('gaps')}
-Proposed Research Plan: {result.get('final_plan')}
-
-OUTPUT:
-Concise professional summary. Bullet points allowed.
+Trends: {result.get('trends')}
+Gaps: {result.get('gaps')}
+Plan: {result.get('final_plan')}
 """
-
     return generate_response(prompt, llm)
 
 
@@ -335,27 +281,16 @@ def answer_user_query(user_query: str, papers: List[Dict], llm) -> str:
         return "No papers available for reference."
 
     source_context = "\n".join([
-        f"Paper: {p.get('title')}\nAbstract: {p.get('summary')}\n---"
+        f"Paper: {p.get('title', p.get('Title', 'Untitled'))}\nAbstract: {p.get('summary', p.get('Summary', ''))}\n---"
         for p in papers
     ])
 
     prompt = f"""
 You are a factual academic assistant.
-
-USER QUESTION:
-"{user_query}"
-
-KNOWLEDGE BASE (Use ONLY this information):
+USER QUESTION: "{user_query}"
+KNOWLEDGE BASE:
 {source_context}
-
-RESPONSE RULES:
-- If answer is found in the papers → cite paper titles exactly:
-  Example: According to "Paper A", …
-- If unknown → say: "Based on the current papers, this information is not available."
-- Keep response concise (4–6 sentences max).
-- Do NOT add outside knowledge.
-
-Provide a single, clear answer now.
+Answer concisely using ONLY the papers. Cite them.
 """
 
     return generate_response(prompt, llm)
