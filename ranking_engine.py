@@ -1,24 +1,27 @@
 import numpy as np
 import pandas as pd
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import MinMaxScaler
 from typing import List, Dict, Optional, Union
-import streamlit as st # REQUIRED for caching
+import streamlit as st
 
-# --- 1. OPTIMIZATION: Cache the AI Model ---
+# --- 1. Load & Cache Models ---
 @st.cache_resource
-def load_embedding_model():
-    try:
-        return SentenceTransformer('all-MiniLM-L6-v2')
-    except Exception as e:
-        print(f"⚠️ Error loading SentenceTransformer: {e}")
-        return None
+def load_models():
+    # Bi-encoder for fast retrieval/novelty
+    bi_encoder = SentenceTransformer('all-MiniLM-L6-v2')
+    
+    # Cross-encoder for HIGH ACCURACY ranking
+    cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2') 
+    
+    return bi_encoder, cross_encoder
 
-model = load_embedding_model()
+# Load both models
+bi_model, cross_model = load_models()
 scaler = MinMaxScaler()
 
-# Top-tier academic venues list
+# --- 2. Top-tier venues (Restored) ---
 TOP_TIER_VENUES = {
     'neurips', 'icml', 'iclr', 'cvpr', 'iccv', 'eccv', 'acl', 'emnlp', 'naacl',
     'nature', 'science', 'pnas', 'jama', 'new england journal of medicine', 
@@ -34,106 +37,94 @@ def get_venue_score(venue_name: Optional[str]) -> float:
             return 1.0
     return 0.5
 
+# --- 3. Calculate novelty ---
 def calculate_novelty(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or 'summary' not in df.columns or model is None:
+    if df.empty or 'summary' not in df.columns or bi_model is None:
         df['novelty'] = 0.0
         return df
 
-    # Ensure all summaries are strings to prevent crashes
     summaries = df['summary'].fillna("").astype(str).tolist()
-    embeddings = model.encode(summaries)
-    
+    embeddings = bi_model.encode(summaries)
     similarity_matrix = cosine_similarity(embeddings)
     np.fill_diagonal(similarity_matrix, 0)
-    
-    # Novelty = 1 - (How similar is this paper to its closest neighbor?)
-    max_similarity = similarity_matrix.max(axis=1)
-    df['novelty'] = 1 - max_similarity
+    df['novelty'] = 1 - similarity_matrix.max(axis=1)
     return df
 
-def embed_query_variants(query: str) -> np.ndarray:
-    if model is None: return np.zeros((1, 384))
-    if not query or not isinstance(query, str): query = "general research"
+# --- 4. Cross-Encoder Re-Ranking ---
+def compute_cross_encoder_scores(query: str, summaries: List[str]) -> List[float]:
+    if not cross_model or not query:
+        return [0.0] * len(summaries)
     
-    variants = [q.strip() for q in query.split(" OR ") if q.strip()]
-    if not variants: variants = [query]
+    pairs = [[query, doc] for doc in summaries]
+    scores = cross_model.predict(pairs)
+    return scores
 
-    embeddings = model.encode(variants)
-    if embeddings.ndim == 1: embeddings = embeddings.reshape(1, -1)
-    return embeddings
-
-def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, weights: Optional[Dict[str, float]] = None) -> List[Dict]:
-    """
-    Ranks papers based on Semantic Relevance, Novelty, LLM Score, and Citations.
-    """
-    # 1. Convert Input to DataFrame
+# --- 5. Main ranking function ---
+def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, user_requested_count: int = 5) -> List[Dict]:
     if isinstance(input_data, list):
         df = pd.DataFrame(input_data)
     else:
         df = input_data.copy()
+    
+    if df.empty:
+        return []
 
-    if df.empty: return []
-
-    # 2. Standardize Columns
+    # Clean columns (Forces lowercase, prevents KeyError 'Title')
     df.columns = [c.lower() for c in df.columns]
     
-    # Force Numeric Types
+    # Handle numeric columns safely
     df['citationcount'] = pd.to_numeric(df.get('citationcount', 0), errors='coerce').fillna(0)
     df['llm_score'] = pd.to_numeric(df.get('llm_score', 0), errors='coerce').fillna(0)
-    
-    # 3. Novelty
+
+    # --- A. Semantic Relevance (Cross-Encoder) ---
+    summaries = df['summary'].fillna("").astype(str).tolist()
+    ce_scores = compute_cross_encoder_scores(query, summaries)
+    df['relevance'] = ce_scores
+
+    # --- B. Novelty ---
     if 'novelty' not in df.columns:
         df = calculate_novelty(df)
 
-    # 4. Semantic Relevance (The "Meaning" Match)
-    if model is not None and 'summary' in df.columns:
-        query_embeddings = embed_query_variants(query)
-        summaries = df['summary'].fillna("").astype(str).tolist()
-        summary_embeddings = model.encode(summaries)
-        
-        sim_matrix = cosine_similarity(summary_embeddings, query_embeddings)
-        df['relevance'] = sim_matrix.max(axis=1)
-    else:
-        df['relevance'] = 0.0
-
-    # 5. Metadata Scores
+    # --- C. Venue & Normalization ---
     df['venue'] = df.get('venue', 'Unknown')
     df['venuescore'] = df['venue'].apply(get_venue_score)
 
-    # 6. Normalization Helper
     def safe_normalize(series):
         if series.max() > series.min():
             return scaler.fit_transform(series.values.reshape(-1, 1)).flatten()
         return np.full(len(series), 0.5)
 
+    # Normalize metrics
     df['norm_relevance'] = safe_normalize(df['relevance'])
     df['norm_novelty'] = safe_normalize(df['novelty'])
-    df['norm_llm_score'] = df['llm_score'] / 10.0  # Assumes LLM score is 0-10
     df['norm_venue'] = df['venuescore']
+    df['norm_citations'] = safe_normalize(np.log1p(df['citationcount']))
     
-    # Log transform citations
-    df['log_citations'] = np.log1p(df['citationcount'])
-    df['norm_citations'] = safe_normalize(df['log_citations'])
+    # Normalize LLM Score (0-10 -> 0.0-1.0)
+    df['norm_llm'] = df['llm_score'] / 10.0
 
-    # 7. Weighted Scoring Formula (High Relevance Preference)
-    default_weights = {
-        'relevance': 0.60,  # Increased Weight (High Priority)
-        'llm_score': 0.20,  # Quality Check
-        'novelty': 0.10,    # Unique insights
-        'venue': 0.05,
-        'citations': 0.05
+    # --- D. Final Weighted Score ---
+    # Updated weights to include 'llm_score'
+    weights = {
+        'relevance': 0.50,  # Cross-Encoder (Most important)
+        'llm_score': 0.20,  # Gemini's Opinion
+        'novelty': 0.10,
+        'venue': 0.10,
+        'citations': 0.10
     }
-    final_weights = {**default_weights, **(weights or {})}
 
     df['finalscore'] = (
-        final_weights['relevance'] * df['norm_relevance'] +
-        final_weights['novelty'] * df['norm_novelty'] +
-        final_weights['llm_score'] * df['norm_llm_score'] +
-        final_weights['venue'] * df['norm_venue'] +
-        final_weights['citations'] * df['norm_citations']
-    ) * 5.0 # Scale to 5
+        weights['relevance'] * df['norm_relevance'] +
+        weights['llm_score'] * df['norm_llm'] +
+        weights['novelty'] * df['norm_novelty'] +
+        weights['venue'] * df['norm_venue'] +
+        weights['citations'] * df['norm_citations']
+    ) * 5.0
 
-    # 8. Sort and Return
+    # Sort
     df = df.sort_values(by='finalscore', ascending=False).reset_index(drop=True)
     
-    return df.to_dict(orient='records')
+    # --- E. Strict Slicing ---
+    result_df = df.head(user_requested_count)
+    
+    return result_df.to_dict(orient='records')
