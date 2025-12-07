@@ -58,7 +58,18 @@ def compute_cross_encoder_scores(query: str, summaries: List[str]) -> List[float
     pairs = [[query, doc] for doc in summaries]
     scores = cross_model.predict(pairs)
     return scores
-
+# new exact match booster
+def boost_exact_matches(df: pd.DataFrame, query: str)-> pd.DataFrame:
+    """If the user's query appears exactly in the title, give it a HUGE score boost"""
+    if df.empty or not query:
+        return df
+    #normalize for comparison
+    query_norm = query.lower().strip()
+    #massive booost to ensure it jumpt to #1
+    mask = df['title'].str.lower().str.contains(query_norm,regex=False)
+    if mask.any():
+        df.loc[mask,'finalscore'] += 50.0
+    return df
 # --- 5. Main ranking function ---
 def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, user_requested_count: int = 5) -> List[Dict]:
     if isinstance(input_data, list):
@@ -120,7 +131,8 @@ def rank_papers(input_data: Union[pd.DataFrame, List[Dict]], query: str, user_re
         weights['venue'] * df['norm_venue'] +
         weights['citations'] * df['norm_citations']
     ) * 5.0
-
+#apply boost
+    df = boost_exact_matches(df,query)
     # Sort
     df = df.sort_values(by='finalscore', ascending=False).reset_index(drop=True)
     
