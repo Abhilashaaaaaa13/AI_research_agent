@@ -2,7 +2,7 @@ import streamlit as st
 import uuid
 import pandas as pd
 from langchain_core.messages import HumanMessage, AIMessage
-
+import time
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Deep Research Agent",
@@ -40,9 +40,54 @@ div.stButton > button:hover { background-color: #6366f1 !important; }
 input[type="text"], input[type="number"] { background-color: #1e1e1e !important; color: white !important; border: 1px solid #4b5563 !important; }
 </style>
 """, unsafe_allow_html=True)
+#helper:stream text--
+def stream_text(text):
+    """Simulates streaming for typewriter effect"""
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(0.002)
 
+# sidebar:persistence
+st.sidebar.title("🗂️ Research History")
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+
+st.sidebar.markdown(f"**Current Session ID:**")
+st.sidebar.code(st.session_state.thread_id)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Resume Chat")
+existing_thread = st.sidebar.text_input("Enter past Session ID to resume:")
+
+if st.sidebar.button("Load Session"):
+    if existing_thread:
+        st.session_state.thread_id = existing_thread
+        #fetch state from db
+        config = {"configurable" : {"thread_id":existing_thread}}
+        state_snapshot = graph.get_state(config)
+        if state_snapshot.values:
+            val = state_snapshot.values
+            #hydrate ui state 
+            st.session_state.research_started = True
+            st.session_state.topic = val.get("topic","")
+            st.session_state.ranked_papers = val.get("ranked_papers")
+            st.session_state.gaps_content = val.get("gaps")
+            st.session_state.roadmap_content = val.get("roadmap")
+            st.session_state.final_report = val.get("analysis_report")
+            st.session_state.messages = val.get("messages",[])
+
+            #update visibility flags
+            if st.session_state.trends_content: st.session_state.show_trends = True
+            if st.session_state.gaps_content: st.session_state.show_gaps = True
+            if st.session_state.roadmap_content: st.session_state.show_roadmap = True
+            if st.session_state.final_report: st.session_state.show_summary = True
+
+            st.success("Session Loaded!")
+            st.rerun()
+        else:
+            st.sidebar.error("Session ID not found.")
 # --- Session State ---
-if "thread_id" not in st.session_state: st.session_state.thread_id = str(uuid.uuid4())
+
 if "messages" not in st.session_state: st.session_state.messages = []
 if "research_started" not in st.session_state: st.session_state.research_started = False
 
@@ -260,3 +305,5 @@ if st.session_state.final_report:
         ai_msg = output["messages"][-1].content
         st.session_state.messages.append(AIMessage(content=ai_msg))
         st.chat_message("assistant").write(ai_msg)
+        #streaming effect
+        st.chat_message("assistant").write_stream(stream_text(ai_msg))
