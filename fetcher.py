@@ -117,7 +117,7 @@ def fetch_openalex_papers(query: str, max_results: int = 5) -> List[Dict]:
     params = {
         "search": query,
         "per_page": max_results,
-        "filter": "from_publication_date:2020-01-01",
+        "filter": "from_publication_date:2010-01-01",
         "sort": "relevance_score:desc"
     }
     try:
