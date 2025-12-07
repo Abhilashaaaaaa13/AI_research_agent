@@ -1,8 +1,9 @@
 import pandas as pd
+import sqlite3  # <--- Ye Built-in hai, install mat karna
 from typing import TypedDict, List, Annotated
 import operator
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 # --- 1. IMPORT FUNCTIONS ---
@@ -29,7 +30,7 @@ class AgentState(TypedDict):
     topic: str
     max_results: int
     num_trends: int
-    num_gaps: int          # <--- ADDED: To track how many gaps user wants
+    num_gaps: int
     refined_queries: List[str]
     raw_papers: List[dict]
     ranked_papers: List[dict]
@@ -49,7 +50,6 @@ def refine_node(state: AgentState):
     return {"refined_queries": queries, "status": "Refined Queries"}
 
 def fetch_node(state: AgentState):
-    # --- SAFETY CHECK: Don't fetch if we already have papers ---
     if state.get("raw_papers") and len(state["raw_papers"]) > 0:
         return {"raw_papers": state["raw_papers"], "status": "Using Cached Papers"}
 
@@ -88,7 +88,6 @@ def keyword_filter_node(state: AgentState):
     }
 
 def rank_node(state: AgentState):
-    # If we already ranked them, use cached version to save time/cost
     if state.get("ranked_papers") and len(state["ranked_papers"]) > 0:
          return {"ranked_papers": state["ranked_papers"], "status": "Using Cached Rankings"}
 
@@ -106,7 +105,6 @@ def rank_node(state: AgentState):
     return {"ranked_papers": final_ranked, "status": "Ranked & Sliced Papers"}
 
 def trends_node(state: AgentState):
-    # Optimization: If trends already exist in state, skip regeneration
     if state.get("trends"):
         return {"trends": state["trends"], "status": "Using Cached Trends"}
 
@@ -120,7 +118,6 @@ def trends_node(state: AgentState):
     return {"trends": trends, "status": "Identified Trends"}
 
 def gaps_node(state: AgentState):
-    # Optimization: If gaps already exist, skip regeneration
     if state.get("gaps"):
         return {"gaps": state["gaps"], "status": "Using Cached Gaps"}
 
@@ -129,11 +126,8 @@ def gaps_node(state: AgentState):
         return {"gaps": [], "status": "Skipped Gaps"}
         
     df_ranked = pd.DataFrame(papers)
-    
-    # --- UPDATED: Reads 'num_gaps' from State ---
     num_gaps = state.get("num_gaps") or 2
     gaps = find_gaps_with_citations(df_ranked, llm, num_gaps=num_gaps)
-    
     return {"gaps": gaps, "status": "Analyzed for Gaps"}
 
 def roadmap_node(state: AgentState):
@@ -175,26 +169,19 @@ workflow.add_node("create_roadmap", roadmap_node)
 workflow.add_node("summary", summary_node)
 workflow.add_node("chatbot", chatbot_node)
 
-# --- SMART ROUTER ---
 def route_input(state: AgentState):
-    # 1. Chat Mode
     if state.get("messages") and len(state["messages"]) > 0:
         return "chatbot"
-
-    # 2. Analysis Mode (If papers exist, DO NOT Fetch again)
     if state.get("ranked_papers") and len(state["ranked_papers"]) > 0:
-        # If we already have trends and inputs have gaps, maybe jump? 
-        # For simplicity, we route to trends. The trends_node has a cache check 
-        # so it will be fast if trends exist, then move to gaps.
-        if state.get("trends") and state.get("num_gaps"):
-             return "extract_gaps" # Jump straight to gaps if we have trends
-        
+        # Smart Routing: Check what is missing and go there
+        if not state.get("trends"):
+            return "extract_trends"
+        if not state.get("gaps") and state.get("num_gaps"): # If user asked for gaps
+             return "extract_gaps"
+        # If we have everything, default to trends (UI handles specific calls)
         return "extract_trends"
-
-    # 3. Search Mode
     return "refine"
 
-# Update entry points
 workflow.set_conditional_entry_point(
     route_input,
     {
@@ -205,7 +192,6 @@ workflow.set_conditional_entry_point(
     }
 )
 
-# Define the flow
 workflow.add_edge("refine", "fetch")
 workflow.add_edge("fetch", "keyword_extract")
 workflow.add_edge("keyword_extract", "keyword_filter")
@@ -217,5 +203,9 @@ workflow.add_edge("create_roadmap", "summary")
 workflow.add_edge("summary", END)
 workflow.add_edge("chatbot", END)
 
-memory = MemorySaver()
+# --- PERSISTENCE SETUP ---
+# Ye line 'checkpoints.sqlite' naam ki file banayegi
+conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+memory = SqliteSaver(conn)
+
 graph = workflow.compile(checkpointer=memory)
