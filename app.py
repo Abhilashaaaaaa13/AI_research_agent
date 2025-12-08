@@ -19,7 +19,7 @@ st.set_page_config(
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
-# --- 3. HISTORY MANAGEMENT (NEW 🆕) ---
+# --- 3. HISTORY MANAGEMENT ---
 HISTORY_FILE = "chat_history.json"
 
 def load_history():
@@ -35,7 +35,6 @@ def load_history():
 def save_to_history(thread_id, topic):
     """Save current session to history"""
     history = load_history()
-    # Save with topic name (or 'Untitled' if empty)
     topic_name = topic if topic else "Untitled Research"
     history[thread_id] = topic_name
     
@@ -74,7 +73,6 @@ def stream_text(text):
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 
-# Load History Logic
 if "history" not in st.session_state:
     st.session_state.history = load_history()
 
@@ -83,14 +81,11 @@ st.sidebar.title("🗂️ Past Researches")
 
 # 1. New Research Button
 if st.sidebar.button("➕ Start New Research", type="primary"):
-    # Save current before resetting
     if "topic" in st.session_state and st.session_state.topic:
         save_to_history(st.session_state.thread_id, st.session_state.topic)
     
-    # Generate NEW ID
     st.session_state.thread_id = str(uuid.uuid4())
     
-    # Reset State variables
     keys_to_reset = ["messages", "research_started", "ranked_papers", "trends_content", 
                      "gaps_content", "roadmap_content", "final_report", "topic"]
     for key in keys_to_reset:
@@ -109,13 +104,10 @@ st.sidebar.markdown("### 📜 History")
 
 # 2. Show List of Past Sessions
 history = load_history()
-# Reverse to show latest first
 for t_id, t_topic in list(history.items())[::-1]:
-    # Display as a button
     if st.sidebar.button(f"📄 {t_topic}", key=t_id):
         st.session_state.thread_id = t_id
         
-        # Load Data from Database
         config = {"configurable": {"thread_id": t_id}}
         state_snapshot = graph.get_state(config)
         
@@ -130,7 +122,6 @@ for t_id, t_topic in list(history.items())[::-1]:
             st.session_state.final_report = val.get("analysis_report")
             st.session_state.messages = val.get("messages", [])
             
-            # Reset visibility
             st.session_state.show_trends = bool(st.session_state.trends_content)
             st.session_state.show_gaps = bool(st.session_state.gaps_content)
             st.session_state.show_roadmap = bool(st.session_state.roadmap_content)
@@ -153,7 +144,6 @@ for key in ["show_trends", "show_gaps", "show_roadmap", "show_summary"]:
 if not st.session_state.research_started:
     st.title("🔬 Deep AI Research Agent")
     
-    # Pre-fill topic
     default_topic = st.session_state.get("topic", "")
     topic = st.text_input("Enter Research Topic", value=default_topic, placeholder="e.g. Generative AI Agents")
     
@@ -169,7 +159,6 @@ if not st.session_state.research_started:
             st.session_state.max_results = int(num_papers_str)
             st.session_state.research_started = True
             
-            # Save to history immediately so it appears in sidebar
             save_to_history(st.session_state.thread_id, topic)
             st.rerun()
 
