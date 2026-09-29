@@ -1,29 +1,28 @@
-#Environment Variables (CRITICAL: Contains API Keys)
-
+# Environment variables (contains API keys)
 .env
 
-#Python Virtual Environment
-
+# Python virtual environments
 venv/
 env/
 .venv/
 
-#Bytecode and Cache
-
-pycache/
+# Bytecode and cache
+__pycache__/
 *.pyc
-.streamlit/
 
-#Streamlit Local Runtime
-
+# Streamlit secrets (config.toml is committed for the theme)
 .streamlit/secrets.toml
 
-#OS specific files
+# Local session data (saved research sessions)
+checkpoints.sqlite
+checkpoints.sqlite-*
+chat_history.json
+last_session.txt
 
+# OS specific files
 .DS_Store
 Thumbs.db
 
-#IDE specific files
-
+# IDE specific files
 .vscode/
 .idea/

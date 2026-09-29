@@ -1,120 +1,146 @@
-🧬 Deep Research Agent (AI Scientist)
+# 🧬 Deep Research Agent
 
-An autonomous research assistant powered by LangGraph, Gemini 1.5, and Streamlit.
+An AI research assistant built with **LangGraph**, **Google Gemini 3** (free tier only) and **Streamlit**.
 
-This agent automates the heavy lifting of academic research. It fetches real-time papers from ArXiv & OpenAlex, ranks them using vector embeddings, reads full PDFs to identify research gaps, and synthesizes a strategic roadmap—all in a seamless, interactive dashboard.
+Give it a topic and it searches four academic databases, ranks the most relevant papers, and turns them into
+trends, research gaps, a roadmap and an executive summary. You can compare papers side by side, ask follow-up
+questions, and export everything as Markdown, BibTeX or CSV.
 
-🚀 Key Features
+Everything runs on free services: the Gemini API free tier, free public paper databases, and ranking models
+that run locally.
 
-🔍 Multi-Source Retrieval: Aggregates papers from ArXiv and OpenAlex for high coverage.
+## Features
 
-🧠 Intelligent Ranking: Uses a hybrid scoring system:
+**Search**
+- **Four databases**: arXiv, OpenAlex, Semantic Scholar and Crossref, queried in parallel with AI-refined
+  search queries.
+- **Search options**: choose which databases to use and the earliest publication year.
+- **Duplicate merging**: when a paper appears in several databases, the copies are merged (highest citation
+  count, venue, DOI and PDF link are kept) and the card shows where else it was found.
 
-Semantic Match: SentenceTransformer embeddings (all-MiniLM-L6-v2).
+**Ranking**
+- Each paper gets a 0–5 score, and every card shows a **score breakdown**:
 
-AI Evaluation: Gemini 1.5 scores papers for relevance (1-5).
+  | Component | Weight |
+  | --- | --- |
+  | Cross-encoder relevance (`ms-marco-MiniLM-L-6-v2`, runs locally) | 50% |
+  | Gemini relevance rating | 20% |
+  | Novelty (embedding distance to the other papers) | 10% |
+  | Venue (top-tier > published > preprint) | 10% |
+  | Citations (log-scaled) | 10% |
 
-Impact Metrics: Factors in citation counts and venue prestige.
+  Papers whose title contains the exact topic are always ranked first.
+- **Sort** by rank, newest or most cited, and **filter** by source.
 
-📉 Trend Analysis: Identifies emerging technical shifts and patterns across multiple abstracts.
+**Analysis**
+- **Compare papers**: pick 2–4 papers for a table of problem, method, data, results and limitations.
+- **Trends** across the ranked papers, with citations.
+- **Research gaps** in the top 3 papers, analyzed in parallel. Open-access PDFs are downloaded and their final
+  sections read; otherwise the abstract is used.
+- **Roadmap and summary**: a 4-phase research plan and an executive summary.
+- **Regenerate** any analysis step to get a new version.
 
-🧩 Gap Analysis (PDF Reading): Automatically downloads and reads full PDFs to extract specific limitations and future work suggestions.
+**Chat and export**
+- **Chat** with the papers and findings, streamed token by token, with suggested questions to get started.
+- **Export** a Markdown report, BibTeX references (for LaTeX / Zotero) or a CSV paper list.
 
-🗺️ Strategic Roadmap: Generates a phased execution plan based on identified gaps.
+**Sessions**
+- Every session is saved to SQLite and can be reopened from the sidebar, or deleted.
 
-💬 Context-Aware Chat: Chat with the entire research session (papers + findings) to ask follow-up questions.
+## Architecture
 
-🌊 LangGraph Streaming: Visualizes the agent's "thinking process" step-by-step in the UI.
+| File | Role |
+| --- | --- |
+| `app.py` | Streamlit UI: landing page, progress stepper, paper cards, analysis, chat and exports |
+| `agent.py` | LangGraph state machine. Each UI action (`research`, `trends`, `gaps`, `roadmap`, `summary`, `compare`, `chat`) runs only its own stage |
+| `fetcher.py` | API clients for arXiv, OpenAlex, Semantic Scholar and Crossref, plus duplicate merging |
+| `ranking_engine.py` | Local embedding models and the scoring formula |
+| `insight_engine.py` | Gemini clients, prompts, PDF reading, keyword filtering and analysis |
+| `.streamlit/config.toml` | UI theme |
 
-🛠️ Architecture
+The `research` action runs a small pipeline:
 
-The system is built on a modular, stateful architecture:
+```
+refine queries -> fetch -> extract keywords -> keyword filter -> rank
+```
 
-Brain (insight_engine.py): Handles LLM interactions (Gemini), PDF parsing (PyMuPDF), and prompt logic.
+## Models
 
-Body (agent.py): Uses LangGraph to orchestrate the workflow nodes (Fetch -> Rank -> Trends -> Gaps -> Summary). Handles state persistence.
+The app only uses models that are available on the **free** Gemini API tier. Free-tier rate limits apply per
+model, so the work is split between two models, and each automatically falls back to the other when it is
+rate limited.
 
-Limbs (fetcher.py & ranking_engine.py): Pure utility modules for API calls and vector math/ranking logic.
+| Model | Used for | Override with |
+| --- | --- | --- |
+| `gemini-3.8-flash` | trends, gaps, roadmap, summary, comparison, chat | `GEMINI_MODEL` |
+| `gemini-3.5-flash-lite` | query refinement, keywords, relevance scoring | `GEMINI_FAST_MODEL` |
 
-Face (app.py): A modern Streamlit interface with progressive data revealing and session management.
+To stay free, create your key in [Google AI Studio](https://aistudio.google.com/apikey) **without** enabling
+billing on its Google Cloud project. With billing disabled, requests past the free limits are rejected rather
+than charged.
 
-📦 Installation
+## Setup
 
-Prerequisites
+Requires Python 3.12+ (tested on 3.13).
 
-Python 3.9+
-
-A Google Gemini API Key (Free tier works).
-
-1. Clone the Repository
-
-git clone [https://github.com/yourusername/deep-research-agent.git](https://github.com/yourusername/deep-research-agent.git)
-cd deep-research-agent
-
-
-2. Create a Virtual Environment
-
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
-
-
-3. Install Dependencies
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
 
 pip install -r requirements.txt
+```
 
+Create a `.env` file in the project root:
 
-4. Configure Environment
+```
+GOOGLE_API_KEY=your_gemini_api_key
 
-Create a .env file in the root directory:
+# Optional, free: much more reliable results from these two databases
+# OPENALEX_API_KEY=...            https://openalex.org/rest-api
+# SEMANTIC_SCHOLAR_API_KEY=...    https://www.semanticscholar.org/product/api
 
-GOOGLE_API_KEY=your_actual_api_key_here
+# Optional model overrides (keep them on free-tier models)
+# GEMINI_MODEL=gemini-3.8-flash
+# GEMINI_FAST_MODEL=gemini-3.5-flash-lite
+```
 
+## Usage
 
-🏃‍♂️ Usage
-
-Run the Streamlit application:
-
+```bash
 streamlit run app.py
+```
 
+1. Enter a topic (or pick an example), choose how many papers you want, and optionally open
+   **Advanced options** to pick databases and a start year.
+2. Review the ranked papers: sort, filter, open the score breakdown, or compare a few side by side.
+3. Work through **Trends → Gaps → Roadmap → Summary**.
+4. Ask questions in the chat at the bottom of the page.
+5. Use **Export** to download a Markdown report, BibTeX or CSV.
 
-Enter a Topic: Type a research interest (e.g., "Multi-Agent Reinforcement Learning").
+The first run downloads the two sentence-transformer models (about 200 MB).
 
-Watch it Work: The agent will stream its progress (Refining Query -> Fetching -> Ranking).
+## Deployment
 
-Explore Results:
+The `Procfile` runs the app on platforms such as Railway or Heroku:
 
-Ranked Papers: View the top papers sorted by relevance score.
+```
+web: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+```
 
-Trends & Gaps: Click the buttons to reveal deep insights.
+Set `GOOGLE_API_KEY` (and optionally the other keys above) as environment variables on the platform.
+`runtime.txt` and `.python-version` select Python 3.13.
 
-Roadmap: See the proposed research strategy.
+## Troubleshooting
 
-Chat: Use the chat interface at the bottom to ask questions like "What specific method did Paper 3 use?".
+- **"The free-tier rate limit was reached"**: the Gemini free tier allows only a few requests per minute. The
+  app switches to the other model and retries automatically; if it still fails, wait a minute and try again.
+- **Most papers come from arXiv**: OpenAlex and Semantic Scholar heavily rate-limit anonymous traffic. Add their
+  free API keys to `.env`.
+- **Gaps say "Abstract only"**: the paper's PDF is not openly downloadable, so only its abstract was analyzed.
 
-📂 Project Structure
+## License
 
-├── agent.py            # LangGraph state machine & node logic
-├── app.py              # Streamlit UI (Frontend)
-├── fetcher.py          # ArXiv & OpenAlex API connectors
-├── insight_engine.py   # LLM prompts, PDF reading, & Analysis logic
-├── ranking_engine.py   # Vector embeddings & Scoring math
-├── requirements.txt    # Python dependencies
-└── .env                # API Keys (Not shared)
-
-
-🛡️ Troubleshooting
-
-404 Model Not Found: Ensure your .env key is valid. If gemini-1.5-flash is unavailable in your region, edit insight_engine.py to use gemini-pro.
-
-PDF Read Errors: Some papers restrict automated downloads. The agent will fallback to analyzing the abstract if the PDF download fails.
-
-🤝 Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request for any improvements.
-
-📄 License
-
-MIT License
+MIT

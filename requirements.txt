@@ -1,32 +1,24 @@
-#Core Frameworks
+# Agent orchestration and LLM
+langgraph==1.2.12
+langgraph-checkpoint-sqlite==3.1.1
+langchain-core==1.6.5
+langchain-google-genai==4.4.0
 
-langchain==0.3.7
-langchain-google-genai==2.0.4
-langchain-community==0.3.7
-langchain-core==0.3.19
-langgraph==0.2.48
+# UI
+streamlit==1.64.0
 
-#UI
+# Data processing and math
+pandas==3.0.6
+numpy==2.5.3
+scikit-learn==1.9.1
 
-streamlit==1.40.1
+# PDF reading
+pymupdf==1.28.2
 
-#Data Processing & Math
+# Embeddings and ranking
+sentence-transformers==6.1.0
 
-pandas==2.2.3
-numpy==1.26.4
-scikit-learn==1.5.2
-
-#PDF & File Handling
-
-pymupdf==1.24.13  # This is the 'fitz' library
-
-#AI & Embeddings
-
-sentence-transformers==3.3.1
-python-dotenv==1.0.1
-
-#Research APIs
-
-arxiv==2.1.3
-requests==2.32.3
-langgraph-checkpoint-sqlite
+# Research APIs and utilities
+arxiv==4.0.1
+requests==2.34.2
+python-dotenv==1.2.3
