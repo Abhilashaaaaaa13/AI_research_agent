@@ -397,6 +397,121 @@ def fetch_doaj_papers(query: str, max_results: int, min_year: int) -> List[Dict]
     return papers
 
 
+# ------------------ 10. PLOS ------------------
+def fetch_plos_papers(query: str, max_results: int, min_year: int) -> List[Dict]:
+    """PLOS: peer-reviewed open-access journals (PLOS One, Biology, Medicine, Computational Biology, ...)."""
+    data = _get(
+        "https://api.plos.org/search",
+        {"q": query, "rows": max_results, "wt": "json",
+         # doc_type:full skips the separate per-section documents PLOS also indexes
+         "fq": f"doc_type:full AND publication_date:[{min_year}-01-01T00:00:00Z TO *]",
+         "fl": "id,title_display,abstract,author_display,publication_date,journal"},
+    ).json()
+
+    papers = []
+    for doc in data.get("response", {}).get("docs", []):
+        doi = doc.get("id")
+        papers.append(_paper(
+            "PLOS",
+            id=doi,
+            doi=_clean_doi(doi),
+            title=_strip_tags(doc.get("title_display")),
+            summary=_strip_tags(" ".join(doc.get("abstract") or [])),
+            authors=_clean_authors(doc.get("author_display") or []),
+            published=str(doc.get("publication_date") or "")[:10],
+            venue=doc.get("journal"),
+            pdf_url=f"https://doi.org/{doi}" if doi else "",
+        ))
+    return papers
+
+
+# ------------------ 11. HAL ------------------
+def fetch_hal_papers(query: str, max_results: int, min_year: int) -> List[Dict]:
+    """HAL: open archive of 4M+ documents, strongest in European research across all fields."""
+    data = _get(
+        "https://api.archives-ouvertes.fr/search/",
+        {"q": query, "rows": max_results, "wt": "json", "fq": f"producedDateY_i:[{min_year} TO *]",
+         "fl": "title_s,abstract_s,authFullName_s,producedDateY_i,doiId_s,uri_s,journalTitle_s,"
+               "conferenceTitle_s,fileMain_s,halId_s"},
+    ).json()
+
+    papers = []
+    for doc in data.get("response", {}).get("docs", []):
+        papers.append(_paper(
+            "HAL",
+            id=doc.get("halId_s"),
+            doi=_clean_doi(doc.get("doiId_s")),
+            title=_strip_tags((doc.get("title_s") or [""])[0]),
+            summary=_strip_tags((doc.get("abstract_s") or [""])[0]),
+            authors=_clean_authors(doc.get("authFullName_s") or []),
+            published=str(doc.get("producedDateY_i") or ""),
+            venue=doc.get("journalTitle_s") or doc.get("conferenceTitle_s"),
+            pdf_url=doc.get("fileMain_s") or doc.get("uri_s"),
+        ))
+    return papers
+
+
+# ------------------ 12. Zenodo ------------------
+def _first_last(name: str) -> str:
+    """Zenodo stores names as "Last, First"; show them as "First Last"."""
+    parts = [p.strip() for p in str(name).split(",", 1)]
+    return f"{parts[1]} {parts[0]}" if len(parts) == 2 and parts[1] else parts[0]
+
+
+def fetch_zenodo_papers(query: str, max_results: int, min_year: int) -> List[Dict]:
+    """Zenodo: CERN's open repository for papers, preprints, theses and reports."""
+    data = _get(
+        "https://zenodo.org/api/records",
+        {"q": f"({query}) AND publication_date:[{min_year}-01-01 TO *]", "size": max_results,
+         "type": "publication", "sort": "bestmatch"},
+    ).json()
+
+    papers = []
+    for hit in data.get("hits", {}).get("hits", []):
+        meta = hit.get("metadata") or {}
+        subtype = (meta.get("resource_type") or {}).get("subtype", "")
+        papers.append(_paper(
+            "Zenodo",
+            id=f"zenodo:{hit.get('id')}",
+            doi=_clean_doi(hit.get("doi")),
+            title=_strip_tags(meta.get("title")),
+            summary=_strip_tags(meta.get("description")),
+            authors=_clean_authors(_first_last(c.get("name")) for c in meta.get("creators") or []),
+            published=meta.get("publication_date"),
+            venue=(meta.get("journal") or {}).get("title") or ("Preprint" if subtype == "preprint" else ""),
+            pdf_url=(hit.get("links") or {}).get("self_html"),
+        ))
+    return papers
+
+
+# ------------------ 13. ERIC ------------------
+def fetch_eric_papers(query: str, max_results: int, min_year: int) -> List[Dict]:
+    """ERIC: the US Department of Education's database of education research.
+    Its search has no reliable date filter; min_year is applied afterwards in fetch_recent_papers."""
+    data = _get(
+        "https://api.ies.ed.gov/eric/",
+        {"search": query, "rows": max_results, "format": "json",
+         "fields": "id,title,description,author,publicationdateyear,source,url"},
+    ).json()
+
+    papers = []
+    for doc in data.get("response", {}).get("docs", []):
+        eric_id = doc.get("id")
+        url = doc.get("url") or ""
+        papers.append(_paper(
+            "ERIC",
+            id=eric_id,
+            doi=_clean_doi(url) if "doi.org/" in url else "",
+            title=_strip_tags(doc.get("title")),
+            summary=_strip_tags(doc.get("description")),
+            authors=_clean_authors(doc.get("author") or []),
+            published=str(doc.get("publicationdateyear") or ""),
+            venue=doc.get("source"),
+            pdf_url=doc.get("url") or (f"https://eric.ed.gov/?id={eric_id}" if eric_id else ""),
+        ))
+    return papers
+
+
 # ------------------ Source registry ------------------
 SOURCES: Dict[str, Callable[[str, int, int], List[Dict]]] = {
     "arXiv": fetch_arxiv_papers,
@@ -408,6 +523,10 @@ SOURCES: Dict[str, Callable[[str, int, int], List[Dict]]] = {
     "OpenAIRE": fetch_openaire_papers,
     "CORE": fetch_core_papers,
     "DOAJ": fetch_doaj_papers,
+    "PLOS": fetch_plos_papers,
+    "HAL": fetch_hal_papers,
+    "Zenodo": fetch_zenodo_papers,
+    "ERIC": fetch_eric_papers,
 }
 
 # Shown in the UI so users know what each database covers
@@ -421,6 +540,10 @@ SOURCE_INFO: Dict[str, Dict[str, str]] = {
     "OpenAIRE": {"covers": "European open-science graph of repositories and journals", "url": "https://explore.openaire.eu"},
     "CORE": {"covers": "The largest collection of open-access papers", "url": "https://core.ac.uk"},
     "DOAJ": {"covers": "Peer-reviewed, fully open-access journals", "url": "https://doaj.org"},
+    "PLOS": {"covers": "Peer-reviewed open-access journals, mainly science and medicine", "url": "https://plos.org"},
+    "HAL": {"covers": "Open archive of 4M+ documents, strong in European research", "url": "https://hal.science"},
+    "Zenodo": {"covers": "CERN's open repository of papers, preprints and reports", "url": "https://zenodo.org"},
+    "ERIC": {"covers": "Education research from the US Department of Education", "url": "https://eric.ed.gov"},
 }
 
 

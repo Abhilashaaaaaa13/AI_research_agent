@@ -2,7 +2,7 @@
 
 An AI research assistant built with **LangGraph**, **Google Gemini 3** (free tier only) and **Streamlit**.
 
-Give it a topic and it searches nine free academic databases, ranks the most relevant papers, and turns them into
+Give it a topic and it searches thirteen free academic databases, ranks the most relevant papers, and turns them into
 trends, research gaps, a roadmap and an executive summary. You can compare papers side by side, ask follow-up
 questions, and export everything as Markdown, BibTeX or CSV.
 
@@ -12,7 +12,7 @@ that run locally.
 ## Features
 
 **Search**
-- **Nine free databases**, queried in parallel with the topic plus three short AI-refined queries:
+- **Thirteen free databases**, queried in parallel with the topic plus three short AI-refined queries:
 
   | Database | Covers | Key |
   | --- | --- | --- |
@@ -25,6 +25,13 @@ that run locally.
   | [OpenAIRE](https://explore.openaire.eu) | European open-science graph of repositories and journals | none |
   | [CORE](https://core.ac.uk) | The largest collection of open-access papers | optional, free |
   | [DOAJ](https://doaj.org) | Peer-reviewed, fully open-access journals | none |
+  | [PLOS](https://plos.org) | Peer-reviewed open-access journals, mainly science and medicine | none |
+  | [HAL](https://hal.science) | Open archive of 4M+ documents, strong in European research | none |
+  | [Zenodo](https://zenodo.org) | CERN's open repository of papers, preprints and reports | none |
+  | [ERIC](https://eric.ed.gov) | Education research from the US Department of Education | none |
+
+  Nine of the thirteen need no key at all. The four with optional keys still work without one, but may be
+  rate limited at busy times.
 
 - **Search options**: choose which databases to use and the earliest publication year.
 - **Source report**: the results page shows, for every database, how many papers it returned, how many made
@@ -67,7 +74,7 @@ that run locally.
 | --- | --- |
 | `app.py` | Streamlit UI: landing page, progress stepper, paper cards, analysis, chat and exports |
 | `agent.py` | LangGraph state machine. Each UI action (`research`, `trends`, `gaps`, `roadmap`, `summary`, `compare`, `chat`) runs only its own stage |
-| `fetcher.py` | API clients for the nine databases, per-database stats, and duplicate merging |
+| `fetcher.py` | API clients for the thirteen databases, per-database stats, and duplicate merging |
 | `ranking_engine.py` | Local embedding models and the scoring formula |
 | `insight_engine.py` | Gemini clients, prompts, PDF reading, keyword filtering and analysis |
 | `.streamlit/config.toml` | UI theme |
