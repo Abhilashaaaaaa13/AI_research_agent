@@ -245,20 +245,33 @@ PAPERS:
 
 
 # ------------------ Topic Query Refinement ------------------
+def _clean_query(query: str) -> str:
+    """Remove quotes, boolean operators and year ranges; several databases match every word literally."""
+    query = re.sub(r"\b(19|20)\d{2}(\.\.|-)?((19|20)\d{2})?\b", " ", query)
+    query = re.sub(r"\b(AND|OR|NOT)\b|[\"'()\[\]]", " ", query)
+    return " ".join(query.split())
+
+
 def refine_topic_query(raw_topic: str, llm) -> List[str]:
+    """Return the original topic plus up to 3 short, focused search queries."""
     prompt = f"""
 You are a research query optimizer.
-Task: Create 4 specific, technical search queries for: "{raw_topic}"
+Task: Create 3 academic search queries for: "{raw_topic}"
 
 RULES:
-- Adapt to the specific domain (e.g., if Physics, use physics terminology; if AI, use CS terminology).
-- Ensure queries cover "State of the Art", "Review/Survey", and "Specific Implementations".
+- Each query must be SHORT: 3 to 6 words. Many databases require every word to match.
+- Use the field's standard terminology (e.g., physics terms for physics, CS terms for AI).
+- Cover different angles: one for surveys/reviews, one for core methods, one for applications.
+- No quotation marks, boolean operators, years or date ranges.
 - Output ONLY a valid JSON list of strings.
 """
-    queries = parse_json_list(generate_response(prompt, llm, json_mode=True))
-    if queries:
-        return [str(q).strip() for q in queries if str(q).strip()]
-    return [raw_topic]
+    refined = parse_json_list(generate_response(prompt, llm, json_mode=True)) or []
+    queries = [raw_topic.strip()]
+    for q in refined:
+        cleaned = _clean_query(str(q))
+        if cleaned and cleaned.lower() not in (x.lower() for x in queries):
+            queries.append(cleaned)
+    return queries[:4]
 
 
 # ------------------ Trend Analysis ------------------

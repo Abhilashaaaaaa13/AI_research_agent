@@ -43,6 +43,7 @@ class AgentState(TypedDict, total=False):
     max_results: int
     sources: List[str]  # Which databases to search (all when empty)
     min_year: int  # Earliest publication year to include
+    source_stats: Dict[str, dict]  # Per database: papers found and any error
     num_trends: int
     num_gaps: int
     refined_queries: List[str]
@@ -78,15 +79,18 @@ def refine_node(state: AgentState):
 def fetch_node(state: AgentState):
     user_request = state.get("max_results") or 5
     fetch_limit = min(user_request * 3, 50)
-    papers = fetch_recent_papers(
+    papers, stats = fetch_recent_papers(
         state["refined_queries"],
         max_results=fetch_limit,
         sources=state.get("sources"),
         min_year=state.get("min_year"),
     )
-    if not papers:
-        return {"raw_papers": [], "status": "No papers found"}
-    return {"raw_papers": papers, "status": f"Fetched {len(papers)} unique papers"}
+    per_source = ", ".join(
+        f"{name} {entry['found']}" if not entry["error"] else f"{name} ({entry['error']})"
+        for name, entry in stats.items()
+    )
+    status = f"Fetched {len(papers)} unique papers: {per_source}" if papers else f"No papers found: {per_source}"
+    return {"raw_papers": papers, "source_stats": stats, "status": status}
 
 
 def keyword_extract_node(state: AgentState):

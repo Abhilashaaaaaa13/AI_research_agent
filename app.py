@@ -22,7 +22,6 @@ sys.path.append(BASE_DIR)
 
 HISTORY_FILE = os.path.join(BASE_DIR, "chat_history.json")
 RESULT_KEYS = ["ranked_papers", "trends_content", "gaps_content", "roadmap_content", "final_report", "comparison"]
-ALL_SOURCES = ["arXiv", "OpenAlex", "Semantic Scholar", "Crossref"]
 DEFAULT_MIN_YEAR = 2010
 STAGES = [
     ("ranked_papers", "Papers"),
@@ -136,6 +135,21 @@ footer { visibility: hidden; }
 .feature .desc { font-size: .85rem; opacity: .7; }
 
 .gap-source { font-weight: 650; margin-bottom: .3rem; }
+.source-card {
+    border: 1px solid rgba(128,128,160,.25); border-radius: 12px; padding: .7rem .9rem;
+    background: rgba(128,128,160,.05); margin-bottom: .6rem; height: calc(100% - .6rem);
+}
+.source-card a { font-weight: 650; color: inherit; text-decoration: none; }
+.source-card a:hover { color: #A5ACFF; }
+.source-card div { font-size: .8rem; opacity: .7; margin-top: .15rem; }
+.coverage { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.coverage th { text-align: left; font-weight: 600; opacity: .6; padding: .35rem .5rem; border-bottom: 1px solid rgba(128,128,160,.3); }
+.coverage td { padding: .35rem .5rem; border-bottom: 1px solid rgba(128,128,160,.15); }
+.coverage td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.coverage th.num { text-align: right; }
+.coverage a { color: inherit; }
+.status-ok { color: #3FD1BF; }
+.status-err { color: #F2A65A; }
 .topic-meta { font-size: .85rem; opacity: .65; margin: -.5rem 0 .8rem; }
 .breakdown { display: grid; grid-template-columns: max-content 1fr max-content; gap: .3rem .7rem;
     align-items: center; font-size: .8rem; margin-top: .5rem; max-width: 420px; }
@@ -191,13 +205,14 @@ try:
     with st.spinner("Loading research models (first run can take a minute)..."):
         import agent
         from agent import delete_session, graph
-        from fetcher import paper_year
+        from fetcher import SOURCE_INFO, SOURCES, paper_year
         from insight_engine import FAST_MODEL, MAIN_MODEL, content_to_text
 except Exception as e:
     st.error(f"Could not start the research agent: {e}")
     st.stop()
 
 ss = st.session_state
+ALL_SOURCES = list(SOURCES)
 
 
 def thread_config() -> dict:
@@ -212,6 +227,7 @@ def reset_session():
     ss.pending_question = None
     ss.error = None
     ss.sources = list(ALL_SOURCES)
+    ss.source_stats = {}
     ss.min_year = DEFAULT_MIN_YEAR
     ss.compare_titles = []
     for key in RESULT_KEYS:
@@ -241,6 +257,7 @@ def load_session(thread_id: str):
     ss.final_report = values.get("analysis_report")
     ss.comparison = values.get("comparison")
     ss.sources = values.get("sources") or list(ALL_SOURCES)
+    ss.source_stats = values.get("source_stats") or {}
     ss.min_year = values.get("min_year") or DEFAULT_MIN_YEAR
     papers = values.get("ranked_papers") or []
     ss.compare_titles = [papers[i].get("title", "") for i in values.get("compare_indices") or [] if i < len(papers)]
@@ -267,6 +284,8 @@ def run_research():
                 status.write(f"✓ {values.get('status', node)}")
                 if node in NEXT_STEP_LABEL:
                     status.update(label=NEXT_STEP_LABEL[node] + "...")
+                if node == "fetch":
+                    ss.source_stats = values.get("source_stats") or {}
                 if node == "rank":
                     ranked = values.get("ranked_papers") or []
         status.update(label=f"Selected {len(ranked)} papers", state="complete", expanded=False)
@@ -542,7 +561,7 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    st.caption("Sources: arXiv · OpenAlex · Semantic Scholar · Crossref")
+    st.caption(f"Searching {len(ALL_SOURCES)} databases: {', '.join(ALL_SOURCES)}")
     st.caption(f"Models (free tier): {MAIN_MODEL} · {FAST_MODEL}")
 
 if agent.llm is None:
@@ -567,7 +586,11 @@ if not ss.topic:
         topic = st.text_input("Research topic", key="topic_input", placeholder="e.g. Multi-agent reinforcement learning")
         num_papers = st.slider("Number of papers", min_value=3, max_value=20, value=6)
         with st.expander("Advanced options"):
-            sources = st.multiselect("Databases", ALL_SOURCES, default=ALL_SOURCES)
+            sources = st.multiselect(
+                "Databases", ALL_SOURCES, default=ALL_SOURCES,
+                help="Where to search. Biomedical topics benefit from PubMed and Europe PMC; "
+                "CS and physics from arXiv.",
+            )
             min_year = st.number_input(
                 "Published from (year)", min_value=1950, max_value=datetime.now().year, value=DEFAULT_MIN_YEAR, step=1
             )
@@ -593,7 +616,7 @@ if not ss.topic:
 
     st.markdown("<br>", unsafe_allow_html=True)
     features = [
-        ("Find", "Searches arXiv, OpenAlex, Semantic Scholar and Crossref with AI-refined queries."),
+        ("Find", f"Searches {len(ALL_SOURCES)} free academic databases with AI-refined queries."),
         ("Rank", "Scores papers by relevance, Gemini's rating, novelty, venue and citations."),
         ("Analyze", "Finds cross-paper trends and reads full PDFs to spot research gaps."),
         ("Compare", "Puts papers side by side and builds a roadmap and summary."),
@@ -603,6 +626,16 @@ if not ss.topic:
         col.markdown(
             f'<div class="feature"><div class="num">STEP {i}</div><div class="name">{name}</div>'
             f'<div class="desc">{desc}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    section("Where the papers come from", f"{len(ALL_SOURCES)} free academic databases, searched in parallel.")
+    source_cols = st.columns(3)
+    for i, name in enumerate(ALL_SOURCES):
+        info = SOURCE_INFO.get(name, {})
+        source_cols[i % 3].markdown(
+            f'<div class="source-card"><a href="{esc(info.get("url", "#"))}" target="_blank">{esc(name)}</a>'
+            f'<div>{esc(info.get("covers", ""))}</div></div>',
             unsafe_allow_html=True,
         )
     st.stop()
@@ -668,6 +701,42 @@ m1.metric("Papers", len(papers))
 m2.metric("Sources", len({p.get("source") for p in papers}))
 m3.metric("Avg. score", f"{sum(float(p.get('finalscore') or 0) for p in papers) / len(papers):.2f}")
 m4.metric("Citations", f"{sum(int(float(p.get('citationcount') or 0)) for p in papers):,}")
+
+
+def render_source_coverage():
+    """Table of every searched database: papers found, papers in the final list, and status."""
+    stats = ss.source_stats or {}
+    names = list(stats) or ss.sources
+    rows = []
+    for name in names:
+        entry = stats.get(name, {})
+        in_list = sum(
+            1 for p in papers
+            if p.get("source") == name or name in (p.get("also_in") if isinstance(p.get("also_in"), list) else [])
+        )
+        if entry.get("error"):
+            status = f'<span class="status-err">{esc(entry["error"])}</span>'
+        elif stats:
+            status = '<span class="status-ok">OK</span>'
+        else:
+            status = "—"  # Sessions created before per-database stats were recorded
+        found = entry.get("found", "—") if stats else "—"
+        url = SOURCE_INFO.get(name, {}).get("url", "#")
+        rows.append(
+            f'<tr><td><a href="{esc(url)}" target="_blank">{esc(name)}</a></td>'
+            f'<td class="num">{found}</td><td class="num">{in_list}</td><td>{status}</td></tr>'
+        )
+    st.markdown(
+        '<table class="coverage"><tr><th>Database</th><th class="num">Found</th>'
+        f'<th class="num">In your list</th><th>Status</th></tr>{"".join(rows)}</table>',
+        unsafe_allow_html=True,
+    )
+    if any(e.get("error") == "rate limited" for e in stats.values()):
+        st.caption("Rate-limited databases work reliably with a free API key; see the README.")
+
+
+with st.expander("Where these papers came from", icon=":material/database:"):
+    render_source_coverage()
 
 t1, t2 = st.columns([1, 3], vertical_alignment="bottom")
 sort_by = t1.selectbox("Sort by", list(SORT_OPTIONS), key="sort_by")

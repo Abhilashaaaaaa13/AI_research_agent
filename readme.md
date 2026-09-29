@@ -2,7 +2,7 @@
 
 An AI research assistant built with **LangGraph**, **Google Gemini 3** (free tier only) and **Streamlit**.
 
-Give it a topic and it searches four academic databases, ranks the most relevant papers, and turns them into
+Give it a topic and it searches nine free academic databases, ranks the most relevant papers, and turns them into
 trends, research gaps, a roadmap and an executive summary. You can compare papers side by side, ask follow-up
 questions, and export everything as Markdown, BibTeX or CSV.
 
@@ -12,9 +12,23 @@ that run locally.
 ## Features
 
 **Search**
-- **Four databases**: arXiv, OpenAlex, Semantic Scholar and Crossref, queried in parallel with AI-refined
-  search queries.
+- **Nine free databases**, queried in parallel with the topic plus three short AI-refined queries:
+
+  | Database | Covers | Key |
+  | --- | --- | --- |
+  | [arXiv](https://arxiv.org) | Preprints in CS, physics, maths, statistics and more | none |
+  | [OpenAlex](https://openalex.org) | 250M+ works across every field, with citation counts | optional, free |
+  | [Semantic Scholar](https://www.semanticscholar.org) | 200M+ papers, strongest in CS and biomedicine | optional, free |
+  | [Crossref](https://www.crossref.org) | DOI records from most journal publishers | none |
+  | [PubMed](https://pubmed.ncbi.nlm.nih.gov) | 36M+ biomedical and life-science citations | optional, free |
+  | [Europe PMC](https://europepmc.org) | Life sciences, including bioRxiv and medRxiv preprints | none |
+  | [OpenAIRE](https://explore.openaire.eu) | European open-science graph of repositories and journals | none |
+  | [CORE](https://core.ac.uk) | The largest collection of open-access papers | optional, free |
+  | [DOAJ](https://doaj.org) | Peer-reviewed, fully open-access journals | none |
+
 - **Search options**: choose which databases to use and the earliest publication year.
+- **Source report**: the results page shows, for every database, how many papers it returned, how many made
+  your final list, and whether it failed or was rate limited.
 - **Duplicate merging**: when a paper appears in several databases, the copies are merged (highest citation
   count, venue, DOI and PDF link are kept) and the card shows where else it was found.
 
@@ -53,7 +67,7 @@ that run locally.
 | --- | --- |
 | `app.py` | Streamlit UI: landing page, progress stepper, paper cards, analysis, chat and exports |
 | `agent.py` | LangGraph state machine. Each UI action (`research`, `trends`, `gaps`, `roadmap`, `summary`, `compare`, `chat`) runs only its own stage |
-| `fetcher.py` | API clients for arXiv, OpenAlex, Semantic Scholar and Crossref, plus duplicate merging |
+| `fetcher.py` | API clients for the nine databases, per-database stats, and duplicate merging |
 | `ranking_engine.py` | Local embedding models and the scoring formula |
 | `insight_engine.py` | Gemini clients, prompts, PDF reading, keyword filtering and analysis |
 | `.streamlit/config.toml` | UI theme |
@@ -98,9 +112,11 @@ Create a `.env` file in the project root:
 ```
 GOOGLE_API_KEY=your_gemini_api_key
 
-# Optional, free: much more reliable results from these two databases
+# Optional, free: more reliable results from these databases (they rate-limit anonymous use)
 # OPENALEX_API_KEY=...            https://openalex.org/rest-api
 # SEMANTIC_SCHOLAR_API_KEY=...    https://www.semanticscholar.org/product/api
+# CORE_API_KEY=...                https://core.ac.uk/services/api
+# NCBI_API_KEY=...                https://www.ncbi.nlm.nih.gov/account/ (for PubMed)
 
 # Optional model overrides (keep them on free-tier models)
 # GEMINI_MODEL=gemini-3.8-flash
@@ -137,8 +153,8 @@ Set `GOOGLE_API_KEY` (and optionally the other keys above) as environment variab
 
 - **"The free-tier rate limit was reached"**: the Gemini free tier allows only a few requests per minute. The
   app switches to the other model and retries automatically; if it still fails, wait a minute and try again.
-- **Most papers come from arXiv**: OpenAlex and Semantic Scholar heavily rate-limit anonymous traffic. Add their
-  free API keys to `.env`.
+- **A database shows "rate limited"** in *Where these papers came from*: OpenAlex, Semantic Scholar and CORE
+  rate-limit anonymous traffic. Add their free API keys to `.env`; the other databases still return results.
 - **Gaps say "Abstract only"**: the paper's PDF is not openly downloadable, so only its abstract was analyzed.
 
 ## License
